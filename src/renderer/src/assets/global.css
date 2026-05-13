@@ -1,0 +1,311 @@
+/**
+ * MetaCode  全局样式
+ * Tailwind CSS v4 + CSS 变量主题系统
+ */
+@import "tailwindcss";
+
+/* Tailwind v4 data-theme 暗色模式变体 */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* 注册 CSS 变量为 Tailwind v4 主题色，使 bg-card / text-muted-foreground 等生效 */
+@theme {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+}
+
+/* 自定义 CSS 变量主题（默认亮色） */
+:root {
+  --background: 0 0% 100%;
+  --foreground: 222.2 84% 4.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 84% 4.9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 84% 4.9%;
+  --primary: 248 90% 66%;
+  --primary-foreground: 210 40% 98%;
+  --secondary: 210 40% 96.1%;
+  --secondary-foreground: 222.2 47.4% 11.2%;
+  --muted: 210 40% 96.1%;
+  --muted-foreground: 215.4 16.3% 46.9%;
+  --accent: 210 40% 96.1%;
+  --accent-foreground: 222.2 47.4% 11.2%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 214.3 31.8% 91.4%;
+  --input: 214.3 31.8% 91.4%;
+  --ring: 248 90% 66%;
+  --radius: 0.5rem;
+}
+
+[data-theme="dark"] {
+  --background: 222.2 84% 4.9%;
+  --foreground: 210 40% 98%;
+  --card: 222.2 84% 4.9%;
+  --card-foreground: 210 40% 98%;
+  --popover: 222.2 84% 4.9%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 248 90% 66%;
+  --primary-foreground: 222.2 47.4% 11.2%;
+  --secondary: 217.2 32.6% 17.5%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217.2 32.6% 17.5%;
+  --muted-foreground: 215 20.2% 65.1%;
+  --accent: 217.2 32.6% 17.5%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 62.8% 30.6%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 217.2 32.6% 17.5%;
+  --input: 217.2 32.6% 17.5%;
+  --ring: 248 90% 66%;
+}
+
+/* 基础样式 */
+* {
+  border-color: hsl(var(--border));
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* 窗口拖拽区域 */
+.titlebar {
+  -webkit-app-region: drag;
+  height: 32px;
+}
+.titlebar-button {
+  -webkit-app-region: no-drag;
+}
+
+/* 对话气泡样式 */
+.message-bubble {
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  word-break: break-word;
+}
+.message-bubble-user {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  margin-left: auto;
+}
+
+[data-theme="dark"] .message-bubble-user {
+  background-color: hsl(1.85deg 34% 62% / 75%);
+}
+.message-bubble-assistant {
+  background-color: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground));
+}
+.message-bubble-system {
+  background-color: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+  margin: 0 auto;
+  font-size: 0.875rem;
+}
+
+/* 工具输出卡片 */
+.tool-output-card {
+  border-radius: 0.375rem;
+  border: 1px solid hsl(var(--border));
+  background-color: hsl(var(--card));
+  padding: 0.75rem;
+  margin: 0.5rem 0;
+  font-size: 0.875rem;
+}
+.tool-output-card.success {
+  border-color: rgb(34 197 94 / 0.5);
+}
+.tool-output-card.error {
+  border-color: rgb(239 68 68 / 0.5);
+}
+
+/* 代码编辑器背景色变量 */
+:root {
+  --editor-bg: #f8f9fa;
+  --editor-border: #e9ecef;
+  --editor-line-highlight: rgba(99, 102, 241, 0.08);
+  --editor-selection-bg: rgba(99, 102, 241, 0.15);
+}
+
+[data-theme="dark"] {
+  --editor-bg: #1a1a2e;
+  --editor-border: #2a2a3e;
+  --editor-line-highlight: rgba(99, 102, 241, 0.12);
+  --editor-selection-bg: rgba(99, 102, 241, 0.2);
+}
+
+/* 代码选中样式 */
+.code-line::selection,
+.code-line *::selection {
+  background-color: hsl(var(--primary) / 0.25);
+}
+
+/* 选中代码浮动工具栏动画 */
+@keyframes toolbarFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.selection-toolbar {
+  animation: toolbarFadeIn 0.15s ease-out;
+}
+
+/* 代码行高亮 */
+.code-line.selected-line {
+  background-color: var(--editor-line-highlight);
+  border-left: 2px solid hsl(var(--primary));
+}
+
+/* 隐藏滚动条但保留功能 */
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* 表面色（用于卡片内嵌区域） */
+.bg-surface {
+  background-color: hsl(var(--secondary) / 0.4);
+}
+
+/* 面板布局 */
+.panel {
+  background-color: hsl(var(--card));
+  border-right: 1px solid hsl(var(--border));
+  overflow: auto;
+}
+.panel-header {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid hsl(var(--border));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.panel-content {
+  padding: 1rem;
+}
+
+/* ========================
+   语法高亮样式 (CodeViewer)
+   ======================== */
+
+.syn-code-block {
+  font-family:
+    "Cascadia Code", "Fira Code", "JetBrains Mono", "Consolas", "Monaco",
+    "Courier New", monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  tab-size: 2;
+  -moz-tab-size: 2;
+  white-space: pre;
+  overflow-x: auto;
+  color: #d4d4d4;
+  background-color: #1e1e1e;
+  min-height: 100%;
+}
+
+[data-theme="dark"] .syn-code-block {
+  background-color: #1e1e1e;
+  color: #d4d4d4;
+}
+
+:root:not([data-theme="dark"]) .syn-code-block {
+  background-color: #f5f5f5;
+  color: #333;
+}
+
+/* 语法高亮 token 颜色（深色） */
+[data-theme="dark"] .syn-keyword {
+  color: #569cd6;
+}
+[data-theme="dark"] .syn-string {
+  color: #ce9178;
+}
+[data-theme="dark"] .syn-comment {
+  color: #6a9955;
+}
+[data-theme="dark"] .syn-number {
+  color: #b5cea8;
+}
+
+/* 语法高亮 token 颜色（浅色） */
+:root:not([data-theme="dark"]) .syn-keyword {
+  color: #0000ff;
+}
+:root:not([data-theme="dark"]) .syn-string {
+  color: #a31515;
+}
+:root:not([data-theme="dark"]) .syn-comment {
+  color: #008000;
+}
+:root:not([data-theme="dark"]) .syn-number {
+  color: #098658;
+}
+
+/* 代码行号样式 */
+.code-line-number {
+  min-height: 1.6em;
+  line-height: 1.6;
+  user-select: none;
+}
+
+/* 代码行样式 */
+.code-line {
+  min-height: 1.6em;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+/* 代码选中区域高亮 */
+::selection {
+  background-color: hsl(var(--primary) / 0.3);
+}
