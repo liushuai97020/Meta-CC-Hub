@@ -160,11 +160,22 @@ interface DailyUsage {
   requests: number;
 }
 
+/** 单个网关的用量统计 */
+interface GatewayUsage {
+  gatewayId: string;
+  gatewayName: string;
+  totalTokens: number;
+  totalRequests: number;
+  dailyStats: DailyUsage[];
+}
+
 /** 用量统计 */
 interface UsageStats {
   totalTokens: number;
   totalRequests: number;
   dailyStats: DailyUsage[];
+  /** 按网关维度统计 */
+  gatewayStats: Record<string, GatewayUsage>;
 }
 
 /** 标注上下文（传递给 AI 的底层数据） */
@@ -346,7 +357,12 @@ interface ElectronAPI {
   };
   usage: {
     getStats: () => Promise<UsageStats>;
-    updateStats: (stats: Partial<UsageStats>) => Promise<{ success: boolean }>;
+    updateStats: (data: {
+      tokens: number;
+      requests: number;
+      gatewayId?: string;
+      gatewayName?: string;
+    }) => Promise<{ success: boolean }>;
   };
   sessions: {
     getAll: () => Promise<SessionData[]>;
@@ -378,6 +394,7 @@ interface ElectronAPI {
       message: string,
       cwd?: string,
       annotations?: AnnotationContext[],
+      history?: Array<{ role: string; content: string }>,
     ) => Promise<{ success: boolean; data?: AgentResponse; error?: string }>;
     abort: () => Promise<{ success: boolean }>;
     /** 流式输出 — 实时文本块 */

@@ -100,8 +100,12 @@ const api = {
   // ========================
   usage: {
     getStats: () => ipcRenderer.invoke("usage:getStats"),
-    updateStats: (stats: Partial<UsageStats>) =>
-      ipcRenderer.invoke("usage:updateStats", stats),
+    updateStats: (data: {
+      tokens: number;
+      requests: number;
+      gatewayId?: string;
+      gatewayName?: string;
+    }) => ipcRenderer.invoke("usage:updateStats", data),
   },
 
   // ========================
@@ -131,8 +135,8 @@ const api = {
   // ========================
   agent: {
     init: () => ipcRenderer.invoke("agent:init"),
-    sendMessage: (message: string, cwd?: string, annotations?: AnnotationContext[]) =>
-      ipcRenderer.invoke("agent:sendMessage", { message, cwd, annotations }),
+    sendMessage: (message: string, cwd?: string, annotations?: AnnotationContext[], history?: Array<{role: string; content: string}>) =>
+      ipcRenderer.invoke("agent:sendMessage", { message, cwd, annotations, history }),
     abort: () => ipcRenderer.invoke("agent:abort"),
     // 流式事件监听
     onChunk: (callback: (text: string) => void) => {

@@ -32,9 +32,26 @@ import {
   Brain,
   Image,
   SearchCode,
+  BarChart3,
+  PieChart,
+  Activity,
+  Puzzle,
+  Plug,
+  Sliders,
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+} from "recharts";
 
 // ========================
 // 常量
@@ -1279,101 +1296,398 @@ const NewCard: React.FC<NewCardProps> = ({ onSave, onCancel }) => {
 // 用量统计
 // ========================
 
-const UsageStatsPanel: React.FC = () => {
-  const [stats, setStats] = useState<UsageStats | null>(null);
-  const [expanded, setExpanded] = useState(false);
-  useEffect(() => {
-    loadStats();
-  }, []);
-  const loadStats = async () => {
-    try {
-      setStats(await window.electronAPI.usage.getStats());
-    } catch (e) {
-      console.error("Failed to load stats:", e);
-    }
-  };
-  if (!stats) return null;
+// 生成最近 N 天的图表数据（补零）
+function buildChartData(dailyStats: DailyUsage[], days = 14) {
+  const map = new Map(dailyStats.map((d) => [d.date, d]));
+  const result: { date: string; tokens: number; requests: number }[] = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const key = d.toISOString().slice(0, 10);
+    const found = map.get(key);
+    result.push({
+      date: key.slice(5), // MM-DD
+      tokens: found?.tokens ?? 0,
+      requests: found?.requests ?? 0,
+    });
+  }
+  return result;
+}
+
+function formatTokens(v: number) {
+  if (v >= 1_000_000) return (v / 1_000_000).toFixed(1) + "M";
+  if (v >= 1_000) return (v / 1_000).toFixed(1) + "K";
+  return String(v);
+}
+
+const CHART_COLORS = {
+  tokenLine: "hsl(var(--primary))",
+  tokenArea: "hsl(var(--primary) / 0.15)",
+  requestBar: "hsl(var(--chart-2, 220 70% 50%))",
+  gridLine: "hsl(var(--border))",
+  text: "hsl(var(--muted-foreground))",
+};
+
+/** 折线图卡片组件 */
+const TokenChart: React.FC<{
+  data: { date: string; tokens: number; requests: number }[];
+  accentColor?: string;
+}> = ({ data, accentColor }) => {
+  const lineColor = accentColor || CHART_COLORS.tokenLine;
   return (
-    <div className="border border-border rounded-xl overflow-hidden">
-      <button
-        className="flex items-center justify-between w-full px-4 py-3 text-sm hover:bg-accent/50 transition-colors"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <div className="flex items-center gap-2">
-          <Fuel className="h-4 w-4 text-muted-foreground" />
-          <span className="font-medium">用量统计</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">
-            总计 {stats.totalTokens.toLocaleString()} Tokens
-          </span>
-          {expanded ? (
-            <ChevronUp className="h-4 w-4 text-muted-foreground" />
-          ) : (
-            <ChevronDown className="h-4 w-4 text-muted-foreground" />
-          )}
-        </div>
-      </button>
-      {expanded && (
-        <div className="px-4 pb-4 space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-muted/50 p-3 rounded-lg">
-              <div className="text-[10px] text-muted-foreground uppercase tracking-wider">
-                总 Token
-              </div>
-              <div className="text-xl font-semibold mt-1">
-                {stats.totalTokens.toLocaleString()}
-              </div>
-            </div>
-            <div className="bg-muted/50 p-3 rounded-lg">
-              <div className="text-[10px] text-muted-foreground uppercase tracking-wider">
-                总请求
-              </div>
-              <div className="text-xl font-semibold mt-1">
-                {stats.totalRequests.toLocaleString()}
-              </div>
-            </div>
-          </div>
-          {stats.dailyStats.length > 0 && (
-            <div>
-              <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">
-                最近统计
-              </div>
-              <div className="space-y-1">
-                {stats.dailyStats
-                  .slice(-7)
-                  .reverse()
-                  .map((day, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center justify-between text-xs py-1"
-                    >
-                      <span className="text-muted-foreground">{day.date}</span>
-                      <div className="flex items-center gap-3">
-                        <span>{day.tokens.toLocaleString()} tokens</span>
-                        <span className="text-muted-foreground/50">
-                          {day.requests} 次请求
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-              </div>
-            </div>
-          )}
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full h-8 text-xs"
-            onClick={loadStats}
-          >
-            <RefreshCw className="h-3 w-3 mr-1" />
-            刷新
-          </Button>
+    <div className="bg-muted/30 rounded-lg p-3">
+      <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">
+        Token 消耗趋势
+      </div>
+      <ResponsiveContainer width="100%" height={140}>
+        <AreaChart data={data}>
+          <defs>
+            <linearGradient id="tokenGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={lineColor} stopOpacity={0.3} />
+              <stop offset="100%" stopColor={lineColor} stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.gridLine} />
+          <XAxis
+            dataKey="date"
+            tick={{ fontSize: 10, fill: CHART_COLORS.text }}
+            axisLine={{ stroke: CHART_COLORS.gridLine }}
+            tickLine={false}
+          />
+          <YAxis
+            tick={{ fontSize: 10, fill: CHART_COLORS.text }}
+            axisLine={false}
+            tickLine={false}
+            tickFormatter={formatTokens}
+            width={40}
+          />
+          <Tooltip
+            cursor={false}
+            contentStyle={{
+              background: "hsl(var(--popover))",
+              border: "1px solid hsl(var(--border))",
+              borderRadius: 8,
+              fontSize: 12,
+            }}
+            itemStyle={{ color: "hsl(var(--foreground))" }}
+            labelStyle={{ color: "hsl(var(--muted-foreground))" }}
+            formatter={((value: number) => `${value.toLocaleString()} Tokens`) as any}
+          />
+          <Area
+            type="monotone"
+            dataKey="tokens"
+            stroke={lineColor}
+            strokeWidth={2}
+            fill="url(#tokenGrad)"
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
+
+/** 请求量柱状图卡片 */
+const RequestChart: React.FC<{
+  data: { date: string; tokens: number; requests: number }[];
+  barColor?: string;
+}> = ({ data, barColor }) => {
+  const color = barColor || CHART_COLORS.requestBar;
+  return (
+    <div className="bg-muted/30 rounded-lg p-3">
+      <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">
+        请求数趋势
+      </div>
+      <ResponsiveContainer width="100%" height={100}>
+        <BarChart data={data}>
+          <CartesianGrid strokeDasharray="3 3" stroke={CHART_COLORS.gridLine} />
+          <XAxis
+            dataKey="date"
+            tick={{ fontSize: 10, fill: CHART_COLORS.text }}
+            axisLine={{ stroke: CHART_COLORS.gridLine }}
+            tickLine={false}
+          />
+          <YAxis
+            tick={{ fontSize: 10, fill: CHART_COLORS.text }}
+            axisLine={false}
+            tickLine={false}
+            allowDecimals={false}
+            width={24}
+          />
+          <Tooltip
+            cursor={false}
+            contentStyle={{
+              background: "hsl(var(--popover))",
+              border: "1px solid hsl(var(--border))",
+              borderRadius: 8,
+              fontSize: 12,
+            }}
+            itemStyle={{ color: "hsl(var(--foreground))" }}
+            labelStyle={{ color: "hsl(var(--muted-foreground))" }}
+            formatter={((value: number) => `${value} 次请求`) as any}
+          />
+          <Bar dataKey="requests" fill={color} radius={[2, 2, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
+
+/** 概要统计卡片 */
+const StatCard: React.FC<{
+  label: string;
+  value: string;
+  sub?: string;
+  icon?: React.ReactNode;
+}> = ({ label, value, sub, icon }) => (
+  <div className="bg-muted/30 border border-border/40 p-4 rounded-xl flex items-center gap-4 hover:border-border/80 transition-colors">
+    {icon && <div className="w-10 h-10 rounded-lg bg-muted/50 flex items-center justify-center text-muted-foreground/40 shrink-0">{icon}</div>}
+    <div className="min-w-0">
+      <div className="text-[10px] text-muted-foreground/60 uppercase tracking-wider font-medium">
+        {label}
+      </div>
+      <div className="text-xl font-bold mt-0.5 text-foreground/90">{value}</div>
+      {sub && (
+        <div className="text-[11px] text-muted-foreground/50 mt-0.5 truncate">{sub}</div>
+      )}
+    </div>
+  </div>
+);
+
+/** 单组统计视图（总览 or 单个网关） */
+const StatsView: React.FC<{
+  totalTokens: number;
+  totalRequests: number;
+  dailyStats: DailyUsage[];
+  accentColor?: string;
+}> = ({ totalTokens, totalRequests, dailyStats, accentColor }) => {
+  const chartData = buildChartData(dailyStats);
+  const hasData = dailyStats.length > 0;
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
+        <StatCard
+          label="总 Token"
+          value={totalTokens.toLocaleString()}
+          icon={<Activity className="h-5 w-5" />}
+        />
+        <StatCard
+          label="总请求"
+          value={totalRequests.toLocaleString()}
+          sub={totalRequests > 0 ? `平均 ${(totalTokens / totalRequests).toFixed(0)} tokens/次` : undefined}
+          icon={<BarChart3 className="h-5 w-5" />}
+        />
+      </div>
+      {hasData ? (
+        <>
+          <TokenChart data={chartData} accentColor={accentColor} />
+          <RequestChart data={chartData} barColor={accentColor} />
+        </>
+      ) : (
+        <div className="text-center text-xs text-muted-foreground/50 py-6 bg-muted/20 rounded-lg">
+          暂无数据，开始对话后将自动记录
         </div>
       )}
     </div>
   );
 };
+
+/** 网关预设颜色映射 */
+const GATEWAY_COLORS = [
+  "hsl(250, 80%, 60%)",
+  "hsl(190, 80%, 50%)",
+  "hsl(330, 70%, 55%)",
+  "hsl(30, 85%, 55%)",
+  "hsl(150, 60%, 45%)",
+  "hsl(0, 70%, 55%)",
+];
+
+const UsageStatsPanel: React.FC = () => {
+  const [stats, setStats] = useState<UsageStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<string>("overview");
+  const { profiles } = useGatewayStore();
+
+  useEffect(() => {
+    loadStats();
+  }, []);
+
+  const loadStats = async () => {
+    setStatsLoading(true);
+    try {
+      const data = await window.electronAPI.usage.getStats();
+      setStats({
+        totalTokens: data.totalTokens ?? 0,
+        totalRequests: data.totalRequests ?? 0,
+        dailyStats: data.dailyStats ?? [],
+        gatewayStats: data.gatewayStats ?? {},
+      });
+    } catch (e) {
+      console.error("Failed to load stats:", e);
+    }
+    setStatsLoading(false);
+  };
+
+  if (statsLoading) {
+    return (
+      <div className="flex items-center justify-center py-16 text-muted-foreground/50">
+        <Loader2 className="h-5 w-5 animate-spin mr-2" />
+        <span className="text-sm">加载中...</span>
+      </div>
+    );
+  }
+
+  // 从实际网关配置生成选项卡，每个配置对应一个选项卡
+  const tabItems = profiles.map((p, i) => ({
+    id: p.id,
+    name: p.name,
+    color: GATEWAY_COLORS[i % GATEWAY_COLORS.length],
+    record: (stats.gatewayStats || {})[p.id] || {
+      gatewayId: p.id,
+      gatewayName: p.name,
+      totalTokens: 0,
+      totalRequests: 0,
+      dailyStats: [],
+    },
+  }));
+
+  const selectedTab = tabItems.find((t) => t.id === activeTab);
+
+  // 当活跃 tab 对应的网关被删除时，切回总览
+  if (activeTab !== "overview" && !tabItems.some((t) => t.id === activeTab)) {
+    setActiveTab("overview");
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* 概要卡片 */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <StatCard
+          label="总 Token 消耗"
+          value={stats.totalTokens.toLocaleString()}
+          sub={`${tabItems.length} 个网关配置`}
+          icon={<Fuel className="h-5 w-5" />}
+        />
+        <StatCard
+          label="总请求数"
+          value={stats.totalRequests.toLocaleString()}
+          sub={stats.totalRequests > 0 ? `平均 ${(stats.totalTokens / stats.totalRequests).toFixed(0)} tokens/次` : undefined}
+          icon={<BarChart3 className="h-5 w-5" />}
+        />
+        <StatCard
+          label="活跃天数"
+          value={stats.dailyStats.length.toString()}
+          sub="有使用记录的天数"
+          icon={<Activity className="h-5 w-5" />}
+        />
+      </div>
+
+      {/* Tab 切换栏 */}
+      <div className="flex gap-1 overflow-x-auto border-b border-border/30 pb-1">
+        <button
+          className={`shrink-0 flex items-center gap-1.5 px-3 py-2 text-xs rounded-t-lg transition-colors border-b-2 ${
+            activeTab === "overview"
+              ? "border-primary text-primary font-medium"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+          onClick={() => setActiveTab("overview")}
+        >
+          <PieChart className="h-3.5 w-3.5" />
+          总览
+        </button>
+        {tabItems.map((tab) => (
+          <button
+            key={tab.id}
+            className={`shrink-0 flex items-center gap-1.5 px-3 py-2 text-xs rounded-t-lg transition-colors border-b-2 ${
+              activeTab === tab.id
+                ? "border-primary text-primary font-medium"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+            onClick={() => setActiveTab(tab.id)}
+          >
+            <span
+              className="w-2 h-2 rounded-full shrink-0"
+              style={{ backgroundColor: tab.color }}
+            />
+            {tab.name}
+          </button>
+        ))}
+      </div>
+
+      {/* 总览面板 */}
+      {activeTab === "overview" && (
+        <StatsView
+          totalTokens={stats.totalTokens}
+          totalRequests={stats.totalRequests}
+          dailyStats={stats.dailyStats}
+        />
+      )}
+
+      {/* 单个网关面板 */}
+      {selectedTab && (
+        <StatsView
+          totalTokens={selectedTab.record.totalTokens}
+          totalRequests={selectedTab.record.totalRequests}
+          dailyStats={selectedTab.record.dailyStats}
+          accentColor={selectedTab.color}
+        />
+      )}
+
+      {/* 底部操作栏 */}
+      <div className="flex items-center justify-between pt-2 border-t border-border/20">
+        <span className="text-[10px] text-muted-foreground/40">
+          {activeTab === "overview"
+            ? `共 ${tabItems.length} 个网关配置`
+            : `网关: ${selectedTab?.name || ""}`}
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 text-xs"
+          onClick={loadStats}
+        >
+          <RefreshCw className="h-3 w-3 mr-1" />
+          刷新
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+// ========================
+// 占位 Tab 组件
+// ========================
+
+const PlaceholderTab: React.FC<{ icon: React.FC<{ className?: string }>; title: string; desc: string }> = ({ icon: Icon, title, desc }) => (
+  <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
+    <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-muted/80 to-muted/30 flex items-center justify-center mb-6 shadow-sm border border-border/30">
+      <Icon className="h-10 w-10 text-muted-foreground/25" />
+    </div>
+    <h2 className="text-xl font-semibold text-foreground/70 mb-2">{title}</h2>
+    <p className="text-sm text-muted-foreground/50 max-w-md leading-relaxed">{desc}</p>
+    <div className="mt-10 px-5 py-2 rounded-full bg-muted/40 border border-border/30">
+      <span className="text-[11px] text-muted-foreground/40 font-medium tracking-wider">即将推出</span>
+    </div>
+  </div>
+);
+
+// ========================
+// 设置页面 Tab 定义
+// ========================
+
+interface SettingsTab {
+  id: string;
+  label: string;
+  icon: React.FC<{ className?: string }>;
+  desc: string;
+}
+
+const SETTINGS_TABS: SettingsTab[] = [
+  { id: "gateway", label: "网关配置", icon: Network, desc: "管理 AI 网关连接与模型分配" },
+  { id: "usage", label: "用量统计", icon: BarChart3, desc: "查看 Token 与请求消耗" },
+  { id: "skills", label: "技能管理", icon: Puzzle, desc: "管理自定义技能与提示词" },
+  { id: "plugins", label: "插件系统", icon: Plug, desc: "扩展应用功能" },
+  { id: "advanced", label: "高级设置", icon: Sliders, desc: "代理、主题与应用配置" },
+];
 
 // ========================
 // 主页面
@@ -1392,6 +1706,7 @@ const ModelSettings: React.FC = () => {
     testConnection,
     pullModels,
   } = useGatewayStore();
+  const [activeSettingsTab, setActiveSettingsTab] = useState("gateway");
   const [isAdding, setIsAdding] = useState(false);
   const [pullingMap, setPullingMap] = useState<Record<string, boolean>>({});
   const [testingMap, setTestingMap] = useState<Record<string, boolean>>({});
@@ -1437,96 +1752,156 @@ const ModelSettings: React.FC = () => {
   };
 
   return (
-    <div className="h-full overflow-y-auto" style={{ 'WebkitAppRegion': 'no-drag' } as any}>
-      {/* 顶部 — 可拖拽区域 */}
-      <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border/50" style={{ 'WebkitAppRegion': 'drag' } as any}>
-        <div className="px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <button
-                className="p-1.5 rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
-                onClick={() => useAppStore.getState().setShowSettings(false)}
-                style={{ 'WebkitAppRegion': 'no-drag' } as any}
-              >
-                <ArrowLeft className="h-4 w-4" />
-              </button>
-              <div>
-                <h1 className="text-lg font-semibold">网关配置</h1>
-                <p className="text-sm text-muted-foreground mt-0.5">
-                  管理 AI 网关，分配多模型策略
-                </p>
-              </div>
+    <div className="h-full flex overflow-hidden" style={{ 'WebkitAppRegion': 'no-drag' } as any}>
+      {/* 左侧导航 */}
+      <div className="w-52 shrink-0 border-r border-border/40 bg-[hsl(var(--muted)/0.15)] flex flex-col" style={{ 'WebkitAppRegion': 'drag' } as any}>
+        <div className="p-4 border-b border-border/20" style={{ 'WebkitAppRegion': 'no-drag' } as any}>
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+              <Sliders className="h-4 w-4 text-primary" />
             </div>
-            <Button
-              size="sm"
-              className="h-8 text-xs"
-              onClick={() => setIsAdding(true)}
-              disabled={isAdding}
-              style={{ 'WebkitAppRegion': 'no-drag' } as any}
-            >
-              <Plus className="h-3.5 w-3.5 mr-1" />
-              新增配置
-            </Button>
+            <div>
+              <h2 className="text-sm font-semibold">设置</h2>
+              <p className="text-[10px] text-muted-foreground/50">MetaCode v1.0.3</p>
+            </div>
           </div>
+          <button
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-accent/60 transition-colors text-muted-foreground hover:text-foreground w-full text-xs"
+            onClick={() => useAppStore.getState().setShowSettings(false)}
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            <span>返回主界面</span>
+          </button>
         </div>
+        <nav className="flex-1 p-2 space-y-1 overflow-y-auto" style={{ 'WebkitAppRegion': 'no-drag' } as any}>
+          {SETTINGS_TABS.map((tab, idx) => {
+            const Icon = tab.icon;
+            const isActive = activeSettingsTab === tab.id;
+            // 在 "用量统计" 和 "技能管理" 之间加分隔线
+            const showDivider = idx === 1;
+            return (
+              <div key={tab.id}>
+                {showDivider && <div className="my-2 border-t border-border/20" />}
+                <button
+                  onClick={() => setActiveSettingsTab(tab.id)}
+                  className={cn(
+                    "relative flex items-center gap-2.5 w-full px-3 py-2.5 rounded-lg text-xs transition-all text-left group",
+                    isActive
+                      ? "bg-primary/10 text-primary font-medium"
+                      : "text-muted-foreground/70 hover:text-foreground hover:bg-accent/40",
+                  )}
+                >
+                  {/* Active indicator bar */}
+                  {isActive && (
+                    <span className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-full bg-primary" />
+                  )}
+                  <div className={cn(
+                    "w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-colors",
+                    isActive
+                      ? "bg-primary/15 text-primary"
+                      : "bg-muted/40 text-muted-foreground/60 group-hover:bg-muted/60",
+                  )}>
+                    <Icon className="h-3.5 w-3.5" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs">{tab.label}</div>
+                    <div className="text-[9px] text-muted-foreground/40 truncate">{tab.desc}</div>
+                  </div>
+                </button>
+              </div>
+            );
+          })}
+        </nav>
       </div>
 
-      <div className="p-6 space-y-5">
-        {/* 当前启用横幅 */}
-        {activeProfile && <ActiveBanner profile={activeProfile} />}
+      {/* 右侧内容 — 使用 key 强制切换时重新挂载 */}
+      <div key={activeSettingsTab} className="flex-1 overflow-y-auto">
 
-        {/* 新建卡片 */}
-        {isAdding && (
-          <NewCard
-            onSave={async (data) => {
-              await addProfile(data);
-              setIsAdding(false);
-            }}
-            onCancel={() => setIsAdding(false)}
+        {/* ===== 网关配置 Tab ===== */}
+        {activeSettingsTab === "gateway" && (
+          <>
+            <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border/50" style={{ 'WebkitAppRegion': 'drag' } as any}>
+              <div className="px-6 py-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h1 className="text-lg font-semibold">网关配置</h1>
+                    <p className="text-sm text-muted-foreground mt-0.5">管理 AI 网关，分配多模型策略</p>
+                  </div>
+                  <Button size="sm" className="h-8 text-xs" onClick={() => setIsAdding(true)} disabled={isAdding} style={{ 'WebkitAppRegion': 'no-drag' } as any}>
+                    <Plus className="h-3.5 w-3.5 mr-1" /> 新增配置
+                  </Button>
+                </div>
+              </div>
+            </div>
+            <div className="p-6 space-y-5">
+              {activeProfile && <ActiveBanner profile={activeProfile} />}
+              {isAdding && (
+                <NewCard
+                  onSave={async (data) => {
+                    await addProfile(data);
+                    setIsAdding(false);
+                  }}
+                  onCancel={() => setIsAdding(false)}
+                />
+              )}
+              {profiles.length === 0 && !isAdding ? (
+                <div className="flex flex-col items-center justify-center py-20 text-center">
+                  <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mb-4">
+                    <Network className="h-8 w-8 text-muted-foreground/40" />
+                  </div>
+                  <h3 className="text-base font-medium text-muted-foreground mb-1">还没有网关配置</h3>
+                  <p className="text-sm text-muted-foreground/60 mb-6 max-w-sm">新增一个网关配置，连接你的 AI 模型提供商</p>
+                  <Button onClick={() => setIsAdding(true)}><Plus className="h-4 w-4 mr-1" /> 新增配置</Button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {profiles.map((profile) => (
+                    <GatewayCard
+                      key={profile.id}
+                      profile={profile}
+                      isActive={activeProfileId === profile.id}
+                      onToggle={() => handleToggle(profile)}
+                      onUpdate={(updates) => updateProfile(profile.id, updates)}
+                      onDelete={() => handleDelete(profile.id)}
+                      onTest={() => handleTest(profile)}
+                      onPull={() => handlePull(profile)}
+                      testing={!!testingMap[profile.id]}
+                      pulling={!!pullingMap[profile.id]}
+                    />
+                  ))}
+                </div>
+              )}
+              <div className="text-center text-xs text-muted-foreground/40 pb-4">
+                MetaCode · 支持多网关配置，每个网关可分配 5 种模型角色
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ===== 用量统计 Tab ===== */}
+        {activeSettingsTab === "usage" && (
+          <>
+            <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border/50" style={{ 'WebkitAppRegion': 'drag' } as any}>
+              <div className="px-6 py-4">
+                <h1 className="text-lg font-semibold">用量统计</h1>
+                <p className="text-sm text-muted-foreground mt-0.5">查看各网关的 Token 与请求消耗</p>
+              </div>
+            </div>
+            <div className="p-6">
+              <UsageStatsPanel />
+            </div>
+          </>
+        )}
+
+        {/* ===== 后续功能的占位 Tab ===== */}
+        {(activeSettingsTab === "skills" || activeSettingsTab === "plugins" || activeSettingsTab === "advanced") && (
+          <PlaceholderTab
+            icon={SETTINGS_TABS.find(t => t.id === activeSettingsTab)!.icon}
+            title={SETTINGS_TABS.find(t => t.id === activeSettingsTab)!.label}
+            desc={SETTINGS_TABS.find(t => t.id === activeSettingsTab)!.desc}
           />
         )}
 
-        {/* 配置列表 */}
-        {profiles.length === 0 && !isAdding ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mb-4">
-              <Network className="h-8 w-8 text-muted-foreground/40" />
-            </div>
-            <h3 className="text-base font-medium text-muted-foreground mb-1">
-              还没有网关配置
-            </h3>
-            <p className="text-sm text-muted-foreground/60 mb-6 max-w-sm">
-              新增一个网关配置，连接你的 AI 模型提供商
-            </p>
-            <Button onClick={() => setIsAdding(true)}>
-              <Plus className="h-4 w-4 mr-1" />
-              新增配置
-            </Button>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {profiles.map((profile) => (
-              <GatewayCard
-                key={profile.id}
-                profile={profile}
-                isActive={activeProfileId === profile.id}
-                onToggle={() => handleToggle(profile)}
-                onUpdate={(updates) => updateProfile(profile.id, updates)}
-                onDelete={() => handleDelete(profile.id)}
-                onTest={() => handleTest(profile)}
-                onPull={() => handlePull(profile)}
-                testing={!!testingMap[profile.id]}
-                pulling={!!pullingMap[profile.id]}
-              />
-            ))}
-          </div>
-        )}
-
-        <UsageStatsPanel />
-
-        <div className="text-center text-xs text-muted-foreground/40 pb-8">
-          MetaCode · 支持多网关配置，每个网关可分配 5 种模型角色
-        </div>
       </div>
     </div>
   );

@@ -91,10 +91,19 @@ interface DailyUsage {
   requests: number;
 }
 
+interface GatewayUsage {
+  gatewayId: string;
+  gatewayName: string;
+  totalTokens: number;
+  totalRequests: number;
+  dailyStats: DailyUsage[];
+}
+
 interface UsageStats {
   totalTokens: number;
   totalRequests: number;
   dailyStats: DailyUsage[];
+  gatewayStats: Record<string, GatewayUsage>;
 }
 
 interface StoreSchema {

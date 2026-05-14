@@ -702,6 +702,12 @@ const ChatArea: React.FC = () => {
     setLoading(true);
     useAppStore.getState().clearDiagnostics();
 
+    // 获取当前会话的历史消息（排除当前消息和空占位）
+    const existingMessages = useSessionStore.getState().sessions.find(s => s.id === sessionId)?.messages || [];
+    const conversationHistory = existingMessages
+      .filter(m => m.content && (m.role === 'user' || m.role === 'assistant'))
+      .map(m => ({ role: m.role, content: m.content }));
+
     await addMessage(sessionId!, {
       role: "user",
       content: message,
@@ -792,34 +798,50 @@ const ChatArea: React.FC = () => {
       window.electronAPI.agent.removeListeners();
     });
 
+    // 在发送前记录当前活跃网关（闭包捕获，避免回调时 store 状态变化）
+    const currentGwId = activeProfile?.id;
+    const currentGwName = activeProfile?.name;
+
     window.electronAPI.agent.onDone((usage) => {
       completeStep("success");
+      const totalTokens = usage.inputTokens + usage.outputTokens;
       addDiagnostic({
         status: "success",
-        message: `Token 消耗: ${(usage.inputTokens + usage.outputTokens).toLocaleString()} (输入 ${usage.inputTokens.toLocaleString()} / 输出 ${usage.outputTokens.toLocaleString()})`,
+        message: `Token 消耗: ${totalTokens.toLocaleString()} (输入 ${usage.inputTokens.toLocaleString()} / 输出 ${usage.outputTokens.toLocaleString()})`,
         timestamp: new Date().toISOString(),
       });
+      // 在 onDone 回调中直接持久化 token 用量（闭包已捕获网关信息）
+      window.electronAPI.usage
+        .updateStats({
+          tokens: totalTokens,
+          requests: 1,
+          gatewayId: currentGwId,
+          gatewayName: currentGwName,
+        })
+        .catch((err) => console.error("[usage] updateStats failed:", err));
       window.electronAPI.agent.removeListeners();
     });
 
+    let sendResult: { success: boolean; data?: AgentResponse; error?: string } | undefined;
     try {
-      const result = await window.electronAPI.agent.sendMessage(
+      sendResult = await window.electronAPI.agent.sendMessage(
         message,
         currentProjectPath || undefined,
         annotations,
+        conversationHistory,
       );
 
-      if (!result.success) {
+      if (!sendResult.success) {
         completeStep("error");
         addDiagnostic({
           status: "error",
-          message: result.error || "发送失败",
+          message: sendResult.error || "发送失败",
           timestamp: new Date().toISOString(),
         });
         appendMessageContent(
           sessionId!,
           assistantMsgId,
-          `\n\n[错误] ${result.error || "发送失败"}`,
+          `\n\n[错误] ${sendResult.error || "发送失败"}`,
         );
       }
     } catch (error) {
@@ -837,6 +859,10 @@ const ChatArea: React.FC = () => {
     } finally {
       setIsSending(false);
       setLoading(false);
+      // 延迟恢复焦点,等待 React state 更新解除 textarea disabled 后再聚焦
+      requestAnimationFrame(() => {
+        inputRef.current?.focus();
+      });
       // 流式完成后将最终消息内容持久化到磁盘
       try {
         const finalSession = useSessionStore.getState().sessions.find(s => s.id === sessionId);

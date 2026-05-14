@@ -30,7 +30,7 @@ const TitleBar: React.FC = () => {
     rightPanelOpen,
     toggleRightPanel,
   } = useAppStore();
-  const { models, activeModelId, setActiveModel } = useModelStore();
+  const { models, activeModelId } = useModelStore();
 
   const activeModel = models.find((m) => m.id === activeModelId);
 
@@ -42,7 +42,7 @@ const TitleBar: React.FC = () => {
       )}
       style={{ height: "32px" }}
     >
-      {/* 左侧：应用名称和窗口控制 */}
+      {/* 左侧：应用名称 */}
       <div className="flex items-center gap-2">
         <span className="text-sm font-semibold text-primary">MetaCode </span>
         {activeModel && (
@@ -52,7 +52,7 @@ const TitleBar: React.FC = () => {
         )}
       </div>
 
-      {/* 中间：快捷操作 */}
+      {/* 右侧：快捷操作 + 窗口控制 */}
       <div className="flex items-center gap-1">
         <Button
           variant="ghost"
@@ -86,10 +86,7 @@ const TitleBar: React.FC = () => {
             <Moon className="h-4 w-4" />
           )}
         </Button>
-      </div>
-
-      {/* 右侧：窗口控制按钮 */}
-      <div className="flex items-center">
+        <div className="w-px h-4 bg-border mx-2" />
         <button
           className="titlebar-button inline-flex items-center justify-center w-10 h-8 hover:bg-secondary transition-colors"
           onClick={() => window.electronAPI?.window.minimize()}

@@ -59,7 +59,7 @@ async function initStore(): Promise<void> {
       recentProjects: [] as string[],
       theme: "dark",
       windowBounds: { width: 1400, height: 900 },
-      usageStats: { totalTokens: 0, totalRequests: 0, dailyStats: [] },
+      usageStats: { totalTokens: 0, totalRequests: 0, dailyStats: [], gatewayStats: {} },
     },
   });
 }
@@ -94,6 +94,7 @@ function createMainWindow(): void {
     minHeight: 700,
     frame: false,
     titleBarStyle: "hidden",
+    icon: path.join(app.getAppPath(), "build/icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "../../preload/preload/preload.js"),
       contextIsolation: true,
@@ -896,25 +897,88 @@ function setupIpcHandlers(): void {
   // 用量统计
   // ==========================================
   ipcMain.handle("usage:getStats", () => {
-    return (
-      store.get("usageStats") || {
-        totalTokens: 0,
-        totalRequests: 0,
-        dailyStats: [],
-      }
-    );
-  });
-
-  ipcMain.handle("usage:updateStats", (_event, stats: Partial<UsageStats>) => {
-    const current = (store.get("usageStats") || {
+    const raw = store.get("usageStats") || {};
+    return {
       totalTokens: 0,
       totalRequests: 0,
       dailyStats: [],
-    }) as UsageStats;
-    const updated = { ...current, ...stats };
-    store.set("usageStats", updated);
-    return { success: true };
+      gatewayStats: {},
+      ...raw,
+    };
   });
+
+  ipcMain.handle(
+    "usage:updateStats",
+    (
+      _event,
+      data: {
+        tokens: number;
+        requests: number;
+        gatewayId?: string;
+        gatewayName?: string;
+      },
+    ) => {
+      const raw = store.get("usageStats") || {};
+      const current: UsageStats = {
+        totalTokens: 0,
+        totalRequests: 0,
+        dailyStats: [],
+        gatewayStats: {},
+        ...raw,
+      };
+
+      const today = new Date().toISOString().slice(0, 10);
+
+      // 更新总计
+      current.totalTokens += data.tokens;
+      current.totalRequests += data.requests;
+
+      // 更新总每日统计
+      let todayTotal = current.dailyStats.find((d) => d.date === today);
+      if (todayTotal) {
+        todayTotal.tokens += data.tokens;
+        todayTotal.requests += data.requests;
+      } else {
+        current.dailyStats.push({
+          date: today,
+          tokens: data.tokens,
+          requests: data.requests,
+        });
+      }
+
+      // 更新网关维度统计
+      if (data.gatewayId) {
+        if (!current.gatewayStats[data.gatewayId]) {
+          current.gatewayStats[data.gatewayId] = {
+            gatewayId: data.gatewayId,
+            gatewayName: data.gatewayName || data.gatewayId,
+            totalTokens: 0,
+            totalRequests: 0,
+            dailyStats: [],
+          };
+        }
+        const gw = current.gatewayStats[data.gatewayId];
+        gw.gatewayName = data.gatewayName || gw.gatewayName;
+        gw.totalTokens += data.tokens;
+        gw.totalRequests += data.requests;
+
+        let gwToday = gw.dailyStats.find((d) => d.date === today);
+        if (gwToday) {
+          gwToday.tokens += data.tokens;
+          gwToday.requests += data.requests;
+        } else {
+          gw.dailyStats.push({
+            date: today,
+            tokens: data.tokens,
+            requests: data.requests,
+          });
+        }
+      }
+
+      store.set("usageStats", current);
+      return { success: true };
+    },
+  );
 
   // ==========================================
   // 会话管理
@@ -1062,7 +1126,7 @@ function setupIpcHandlers(): void {
   // ==========================================
   ipcMain.handle(
     "agent:sendMessage",
-    async (_event, params: { message: string; cwd?: string; annotations?: AnnotationContext[] }) => {
+    async (_event, params: { message: string; cwd?: string; annotations?: AnnotationContext[]; history?: Array<{role: string; content: string}> }) => {
       if (!claudeAgentInstance) {
         return { success: false, error: "Agent not initialized" };
       }
@@ -1100,6 +1164,7 @@ function setupIpcHandlers(): void {
               },
             },
             params.cwd,
+            params.history,
           ),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error("API 请求超时 (120s)")), TIMEOUT_MS)

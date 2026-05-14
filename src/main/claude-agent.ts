@@ -122,6 +122,7 @@ export class ClaudeAgentManager {
     message: string,
     callbacks: StreamCallbacks,
     cwd?: string,
+    history?: Array<{ role: string; content: string }>,
   ): Promise<AgentResponse> {
     if (!this.config) {
       callbacks.onError("Agent not configured");
@@ -133,12 +134,12 @@ export class ClaudeAgentManager {
 
     try {
       if (this.config.modelType === "local") {
-        return await this.sendViaOllama(message, callbacks);
+        return await this.sendViaOllama(message, callbacks, history);
       }
       if (this.config.apiFormat === "openai") {
-        return await this.sendViaOpenAICompatible(message, callbacks, cwd);
+        return await this.sendViaOpenAICompatible(message, callbacks, cwd, history);
       }
-      return await this.sendViaDirectAPI(message, callbacks, cwd);
+      return await this.sendViaDirectAPI(message, callbacks, cwd, history);
     } catch (error: any) {
       // AbortError = 用户主动中断，不是真正的错误
       if (error?.name === 'AbortError' || (String(error).includes('abort') && String(error).includes('signal'))) {
@@ -163,6 +164,7 @@ export class ClaudeAgentManager {
     message: string,
     callbacks: StreamCallbacks,
     cwd?: string,
+    history?: Array<{ role: string; content: string }>,
   ): Promise<AgentResponse> {
     callbacks.onStatus(`Querying ${this.config!.modelName} via Anthropic Messages API...`);
 
@@ -173,7 +175,10 @@ export class ClaudeAgentManager {
     const model = this.config!.modelName || "claude-sonnet-4-6";
     const maxTokens = this.config!.maxTokens || 8192;
     const systemPrompt = this.buildSystemPrompt(model);
-    const messages: any[] = [{ role: "user", content: message }];
+    const messages: any[] = [
+      ...(history || []),
+      { role: "user", content: message },
+    ];
 
     let fullContent = "";
     let totalInputTokens = 0;
@@ -380,8 +385,8 @@ export class ClaudeAgentManager {
     }
 
     const usage = {
-      inputTokens: totalInputTokens,
-      outputTokens: totalOutputTokens,
+      inputTokens: totalInputTokens || Math.ceil(message.length / 4),
+      outputTokens: totalOutputTokens || Math.ceil(fullContent.length / 4),
     };
     callbacks.onDone(usage);
     return { content: fullContent || "(no content)", usage };
@@ -456,7 +461,7 @@ export class ClaudeAgentManager {
     const isClaude = modelName.toLowerCase().includes("claude");
     const identity = isClaude
       ? "You are Claude, an AI assistant built by Anthropic."
-      : `You are ${modelName}, an AI assistant. You are not Claude.`;
+      : "You are a helpful AI assistant integrated into MetaCode, a cross-platform desktop AI programming assistant.";
 
     return [
       identity,
@@ -489,6 +494,7 @@ export class ClaudeAgentManager {
     message: string,
     callbacks: StreamCallbacks,
     cwd?: string,
+    history?: Array<{ role: string; content: string }>,
   ): Promise<AgentResponse> {
     let baseUrl = (this.config!.baseUrl || "").replace(/\/+$/, "");
     // 避免重复 /v1，如果 baseUrl 已是 /v1 则不再追加
@@ -504,6 +510,7 @@ export class ClaudeAgentManager {
 
     const messages: any[] = [
       { role: "system", content: systemPrompt },
+      ...(history || []),
       { role: "user", content: message },
     ];
 
@@ -580,8 +587,8 @@ export class ClaudeAgentManager {
     }
 
     const usage = {
-      inputTokens: totalInputTokens,
-      outputTokens: totalOutputTokens,
+      inputTokens: totalInputTokens || Math.ceil(message.length / 4),
+      outputTokens: totalOutputTokens || Math.ceil(fullContent.length / 4),
     };
     callbacks.onDone(usage);
     return { content: fullContent || "(no content)", usage };
@@ -594,6 +601,7 @@ export class ClaudeAgentManager {
   private async sendViaOllama(
     message: string,
     callbacks: StreamCallbacks,
+    history?: Array<{ role: string; content: string }>,
   ): Promise<AgentResponse> {
     const baseUrl = (this.config!.baseUrl || "http://localhost:11434").replace(
       /\/$/,
@@ -605,7 +613,10 @@ export class ClaudeAgentManager {
 
     const body = JSON.stringify({
       model: this.config!.modelName,
-      messages: [{ role: "user", content: message }],
+      messages: [
+        ...(history || []),
+        { role: "user", content: message },
+      ],
       stream: true,
       options: { num_predict: this.config!.maxTokens || 2048 },
     });
@@ -624,6 +635,8 @@ export class ClaudeAgentManager {
     const decoder = new TextDecoder();
     let fullContent = "";
     let buffer = "";
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -642,10 +655,12 @@ export class ClaudeAgentManager {
             callbacks.onChunk(parsed.message.content);
           }
           if (parsed.done) {
+            totalInputTokens = parsed.prompt_eval_count || 0;
+            totalOutputTokens = parsed.eval_count || 0;
             callbacks.onStatus("Complete");
             callbacks.onDone({
-              inputTokens: parsed.prompt_eval_count || 0,
-              outputTokens: parsed.eval_count || 0,
+              inputTokens: totalInputTokens,
+              outputTokens: totalOutputTokens,
             });
           }
         } catch {
@@ -656,7 +671,10 @@ export class ClaudeAgentManager {
 
     return {
       content: fullContent || "(no content)",
-      usage: { inputTokens: 0, outputTokens: 0 },
+      usage: {
+        inputTokens: totalInputTokens || Math.ceil(message.length / 4),
+        outputTokens: totalOutputTokens || Math.ceil(fullContent.length / 4),
+      },
     };
   }
 

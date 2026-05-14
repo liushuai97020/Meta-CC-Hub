@@ -196,10 +196,21 @@ export interface DailyUsage {
   requests: number;
 }
 
+/** 单个网关的用量统计 */
+export interface GatewayUsage {
+  gatewayId: string;
+  gatewayName: string;
+  totalTokens: number;
+  totalRequests: number;
+  dailyStats: DailyUsage[];
+}
+
 export interface UsageStats {
   totalTokens: number;
   totalRequests: number;
   dailyStats: DailyUsage[];
+  /** 按网关维度统计 */
+  gatewayStats: Record<string, GatewayUsage>;
 }
 
 // DOM 标注
