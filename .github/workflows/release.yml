@@ -1,4 +1,4 @@
-name: Build macOS
+name: Build Windows
 
 on:
   push:
@@ -12,8 +12,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build-macos:
-    runs-on: macos-latest
+  build-windows:
+    runs-on: windows-2022
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,13 +30,13 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Package (macOS)
-        run: npx electron-builder --mac
+      - name: Package (Windows)
+        run: npx electron-builder --win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload to Release
         run: |
-          gh release upload ${{ github.ref_name }} release/*.dmg release/*.zip --clobber
+          gh release upload ${{ github.ref_name }} release/*.exe release/*.exe.blockmap --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

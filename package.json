@@ -27,12 +27,6 @@
       "!src/**/*"
     ],
     "icon": "build/icon",
-    "mac": {
-      "target": [
-        "dmg",
-        "zip"
-      ]
-    },
     "win": {
       "target": [
         "nsis",
