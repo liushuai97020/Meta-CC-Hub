@@ -1,6 +1,6 @@
 {
   "name": "metacode",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "MetaCode  - 跨平台桌面 AI 编程助手",
   "main": "dist/main/main/main.js",
   "scripts": {
