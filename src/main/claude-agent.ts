@@ -9,15 +9,13 @@ import { promisify } from "util";
 
 const execAsync = promisify(exec);
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type SdkQuery = any;
-
 interface AgentConfig {
   apiKey?: string;
   baseUrl?: string;
   modelName?: string;
   maxTokens?: number;
   modelType?: ModelType;
+  apiFormat?: "anthropic" | "openai";
 }
 
 export interface AgentResponse {
@@ -106,16 +104,12 @@ const TOOLS = [
 
 export class ClaudeAgentManager {
   private config: AgentConfig | null = null;
-  private activeQuery: SdkQuery | null = null;
   private abortController: AbortController | null = null;
-  // @anthropic-ai/sdk ESM 模块（动态 import 后缓存）
-  private sdkModule: any = null;
 
   constructor() {}
 
   async initialize(modelConfig: ModelConfig): Promise<void> {
     this.config = this.mapModelConfig(modelConfig);
-    this.activeQuery = null;
     this.abortController = null;
     console.log(
       "[ClaudeAgentManager] Initialized:",
@@ -141,6 +135,9 @@ export class ClaudeAgentManager {
       if (this.config.modelType === "local") {
         return await this.sendViaOllama(message, callbacks);
       }
+      if (this.config.apiFormat === "openai") {
+        return await this.sendViaOpenAICompatible(message, callbacks, cwd);
+      }
       return await this.sendViaDirectAPI(message, callbacks, cwd);
     } catch (error: any) {
       // AbortError = 用户主动中断，不是真正的错误
@@ -159,7 +156,7 @@ export class ClaudeAgentManager {
   }
 
   /**
-   * 直接通过 @anthropic-ai/sdk 调用 Messages API
+   * 通过 Anthropic Messages API（原生 fetch，不依赖 @anthropic-ai/sdk）
    * 本地实现工具，完全跳过 Claude Code 子进程
    */
   private async sendViaDirectAPI(
@@ -167,20 +164,12 @@ export class ClaudeAgentManager {
     callbacks: StreamCallbacks,
     cwd?: string,
   ): Promise<AgentResponse> {
-    callbacks.onStatus(`Querying ${this.config!.modelName}...`);
+    callbacks.onStatus(`Querying ${this.config!.modelName} via Anthropic Messages API...`);
 
     this.abortController = new AbortController();
 
-    if (!this.sdkModule) {
-      this.sdkModule = await import("@anthropic-ai/sdk");
-    }
-    const Anthropic = this.sdkModule.default;
-
-    const client = new Anthropic({
-      apiKey: this.config!.apiKey || "",
-      baseURL: this.config!.baseUrl,
-    });
-
+    const baseUrl = (this.config!.baseUrl || "https://api.anthropic.com").replace(/\/+$/, "");
+    const url = `${baseUrl}/v1/messages`;
     const model = this.config!.modelName || "claude-sonnet-4-6";
     const maxTokens = this.config!.maxTokens || 8192;
     const systemPrompt = this.buildSystemPrompt(model);
@@ -195,89 +184,145 @@ export class ClaudeAgentManager {
         callbacks.onStatus(`Continuing (step ${iteration + 1})...`);
       }
 
-      let stream: any;
+      const body = JSON.stringify({
+        model,
+        max_tokens: maxTokens,
+        system: systemPrompt,
+        messages,
+        stream: true,
+        tools: TOOLS,
+      });
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "anthropic-version": "2023-06-01",
+      };
+      // Anthropic 官方 API 用 x-api-key，其他兼容 API 可能用 Bearer token
+      if (this.config!.apiKey) {
+        headers["x-api-key"] = this.config!.apiKey;
+      }
+
+      let response: Response;
       try {
-        stream = client.messages.stream({
-          model,
-          max_tokens: maxTokens,
-          system: systemPrompt,
-          messages,
-          tools: TOOLS,
-        }, { signal: this.abortController?.signal });
+        response = await fetch(url, {
+          method: "POST",
+          headers,
+          body,
+          signal: this.abortController?.signal,
+        });
       } catch (err: any) {
         if (fullContent) break;
         throw err;
       }
 
+      if (!response.ok) {
+        const errText = await response.text().catch(() => "(no body)");
+        throw new Error(`${response.status} ${errText}`);
+      }
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+
+      // Anthropic SSE 事件解析器
+      let sseBuffer = "";
+      let currentEvent = "";
       let textAccumulator = "";
       const toolUseBlocks: any[] = [];
       const thinkingBlocks: any[] = [];
       let currentToolUse: any = null;
       let currentThinking: string | null = null;
 
-      try {
-        for await (const event of stream) {
-          switch (event.type) {
-            case "message_start":
-              if (event.message?.usage) {
-                totalInputTokens += event.message.usage.input_tokens || 0;
-              }
-              break;
+      function processSseLine(line: string) {
+        if (line.startsWith("event: ")) {
+          currentEvent = line.slice(7).trim();
+        } else if (line.startsWith("data: ")) {
+          const dataStr = line.slice(6);
+          if (!dataStr.trim()) return;
+          try {
+            const data = JSON.parse(dataStr);
+            const eventType = data.type || currentEvent;
 
-            case "content_block_start":
-              if (event.content_block?.type === "tool_use") {
-                currentToolUse = {
-                  id: event.content_block.id,
-                  name: event.content_block.name,
-                  input: "",
-                  parsedInput: null,
-                };
-                currentThinking = null;
-              } else if (event.content_block?.type === "thinking") {
-                currentThinking = "";
-                currentToolUse = null;
-              }
-              break;
+            switch (eventType) {
+              case "message_start":
+                if (data.message?.usage) {
+                  totalInputTokens += data.message.usage.input_tokens || 0;
+                }
+                break;
 
-            case "content_block_delta":
-              if (event.delta?.type === "text_delta") {
-                textAccumulator += event.delta.text;
-                callbacks.onChunk(event.delta.text);
-              } else if (event.delta?.type === "input_json_delta") {
+              case "content_block_start":
+                if (data.content_block?.type === "tool_use") {
+                  currentToolUse = {
+                    id: data.content_block.id,
+                    name: data.content_block.name,
+                    input: "",
+                    parsedInput: null,
+                  };
+                  currentThinking = null;
+                } else if (data.content_block?.type === "thinking") {
+                  currentThinking = "";
+                  currentToolUse = null;
+                }
+                break;
+
+              case "content_block_delta":
+                if (data.delta?.type === "text_delta") {
+                  textAccumulator += data.delta.text;
+                  callbacks.onChunk(data.delta.text);
+                } else if (data.delta?.type === "input_json_delta") {
+                  if (currentToolUse) {
+                    currentToolUse.input += data.delta.partial_json;
+                  }
+                } else if (data.delta?.type === "thinking_delta") {
+                  if (currentThinking !== null) {
+                    currentThinking += data.delta.thinking || "";
+                  }
+                }
+                break;
+
+              case "content_block_stop":
                 if (currentToolUse) {
-                  currentToolUse.input += event.delta.partial_json;
+                  try {
+                    currentToolUse.parsedInput = JSON.parse(currentToolUse.input);
+                  } catch {
+                    currentToolUse.parsedInput = {};
+                  }
+                  toolUseBlocks.push(currentToolUse);
+                  currentToolUse = null;
+                } else if (currentThinking !== null) {
+                  thinkingBlocks.push(currentThinking);
+                  currentThinking = null;
                 }
-              } else if (event.delta?.type === "thinking_delta") {
-                if (currentThinking !== null) {
-                  currentThinking += event.delta.thinking || "";
-                }
-              }
-              break;
+                break;
 
-            case "content_block_stop":
-              if (currentToolUse) {
-                try {
-                  currentToolUse.parsedInput = JSON.parse(currentToolUse.input);
-                } catch {
-                  currentToolUse.parsedInput = {};
+              case "message_delta":
+                if (data.usage) {
+                  totalOutputTokens += data.usage.output_tokens || 0;
                 }
-                toolUseBlocks.push(currentToolUse);
-                currentToolUse = null;
-              } else if (currentThinking !== null) {
-                thinkingBlocks.push(currentThinking);
-                currentThinking = null;
-              }
-              break;
-
-            case "message_delta":
-              if (event.usage) {
-                totalOutputTokens += event.usage.output_tokens || 0;
-              }
-              break;
+                break;
+            }
+          } catch {
+            // skip malformed JSON
           }
+        } else if (line === "") {
+          currentEvent = "";
         }
-      } finally {
-        // 确保流被正确关闭
+      }
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        sseBuffer += decoder.decode(value, { stream: true });
+        const sseLines = sseBuffer.split("\n");
+        sseBuffer = sseLines.pop() || "";
+
+        for (const sseLine of sseLines) {
+          processSseLine(sseLine);
+        }
+      }
+      // 处理 buffer 中剩余的最后一个块
+      if (sseBuffer.trim()) {
+        processSseLine(sseBuffer);
       }
 
       fullContent += textAccumulator;
@@ -286,7 +331,7 @@ export class ClaudeAgentManager {
         break;
       }
 
-      // 构建 assistant 消息（保留所有 content block 类型，避免 thinking 模式校验失败）
+      // 构建 assistant 消息
       const assistantContent: any[] = [];
       for (const thinking of thinkingBlocks) {
         assistantContent.push({ type: "thinking", thinking });
@@ -435,6 +480,112 @@ export class ClaudeAgentManager {
   }
 
   // ======================
+  // OpenAI 兼容 API（third-party / custom）
+  // ======================
+
+  private async sendViaOpenAICompatible(
+    message: string,
+    callbacks: StreamCallbacks,
+    cwd?: string,
+  ): Promise<AgentResponse> {
+    let baseUrl = (this.config!.baseUrl || "").replace(/\/+$/, "");
+    // 避免重复 /v1，如果 baseUrl 已是 /v1 则不再追加
+    const chatEndpoint = baseUrl.endsWith("/v1")
+      ? `${baseUrl}/chat/completions`
+      : `${baseUrl}/v1/chat/completions`;
+    const model = this.config!.modelName || "deepseek-chat";
+    const maxTokens = this.config!.maxTokens || 8192;
+    const systemPrompt = this.buildSystemPrompt(model);
+    callbacks.onStatus(`Querying ${model} via OpenAI-compatible API...`);
+
+    this.abortController = new AbortController();
+
+    const messages: any[] = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: message },
+    ];
+
+    let fullContent = "";
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+
+    for (let iteration = 0; iteration < 20; iteration++) {
+      if (iteration > 0) {
+        callbacks.onStatus(`Continuing (step ${iteration + 1})...`);
+      }
+
+      const body = JSON.stringify({
+        model,
+        messages,
+        max_tokens: maxTokens,
+        stream: true,
+      });
+
+      const response = await fetch(chatEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.config!.apiKey || ""}`,
+        },
+        body,
+        signal: this.abortController?.signal,
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => "(no body)");
+        throw new Error(`${response.status} ${errText}`);
+      }
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let textAccumulator = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith("data: ")) continue;
+          const data = trimmed.slice(6);
+          if (data === "[DONE]") continue;
+          try {
+            const parsed = JSON.parse(data);
+            const choice = parsed.choices?.[0];
+            if (parsed.usage) {
+              totalInputTokens = parsed.usage.prompt_tokens || 0;
+              totalOutputTokens = parsed.usage.completion_tokens || 0;
+            }
+            const delta = choice?.delta?.content;
+            if (delta) {
+              textAccumulator += delta;
+              callbacks.onChunk(delta);
+            }
+          } catch {
+            // skip malformed lines
+          }
+        }
+      }
+
+      fullContent += textAccumulator;
+      // OpenAI 兼容 API 暂不支持工具调用，一次迭代后直接结束
+      break;
+    }
+
+    const usage = {
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+    };
+    callbacks.onDone(usage);
+    return { content: fullContent || "(no content)", usage };
+  }
+
+  // ======================
   // Ollama（local）
   // ======================
 
@@ -524,6 +675,9 @@ export class ClaudeAgentManager {
     if (this.config?.modelType === "local") {
       return await this.sendViaOllama(message, noopCallbacks);
     }
+    if (this.config?.apiFormat === "openai") {
+      return await this.sendViaOpenAICompatible(message, noopCallbacks);
+    }
     return await this.sendViaDirectAPI(message, noopCallbacks);
   }
 
@@ -538,14 +692,6 @@ export class ClaudeAgentManager {
 
   async abort(): Promise<void> {
     this.abortController?.abort();
-    if (this.activeQuery) {
-      try {
-        await this.activeQuery.interrupt();
-      } catch {
-        // ignore if already done
-      }
-    }
-    this.activeQuery = null;
     this.abortController = null;
   }
 
@@ -565,6 +711,7 @@ export class ClaudeAgentManager {
       modelName: modelConfig.modelName,
       maxTokens: modelConfig.maxTokens,
       modelType: modelConfig.type,
+      apiFormat: modelConfig.apiFormat,
     };
   }
 

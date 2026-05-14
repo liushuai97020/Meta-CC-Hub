@@ -23,6 +23,7 @@ interface GatewayProfile {
   baseUrl: string;
   apiKey?: string;
   provider?: 'custom' | 'deepseek';
+  apiFormat?: 'anthropic' | 'openai';
   proxy?: ProxyConfig;
   defaultModel: string;
   expertModel: string;
@@ -47,6 +48,7 @@ interface ModelConfig {
   modelName?: string;
   maxTokens?: number;
   temperature?: number;
+  apiFormat?: 'anthropic' | 'openai';
   group?: string;
   proxy?: ProxyConfig;
   connectionStatus?: ConnectionStatus;

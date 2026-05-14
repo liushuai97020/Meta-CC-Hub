@@ -1,5 +1,5 @@
 {
-  "name": "MetaCode ",
+  "name": "metacode",
   "version": "1.0.0",
   "description": "MetaCode  - 跨平台桌面 AI 编程助手",
   "main": "dist/main/main/main.js",
@@ -13,7 +13,8 @@
     "build:preload": "tsc -p tsconfig.preload.json",
     "start": "cross-env NODE_ENV=production electron .",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win"
   },
   "build": {
     "appId": "com.techcchub.app",
@@ -37,12 +38,6 @@
         "portable"
       ]
     },
-    "linux": {
-      "target": [
-        "AppImage",
-        "deb"
-      ]
-    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
@@ -62,7 +57,6 @@
     "@monaco-editor/react": "^4.7.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "electron": "^39.2.7",
     "electron-store": "^11.0.2",
     "lucide-react": "^1.14.0",
     "monaco-editor": "^0.55.1",

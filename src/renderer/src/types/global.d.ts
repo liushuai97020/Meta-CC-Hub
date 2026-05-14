@@ -32,6 +32,7 @@ interface GatewayProfile {
   baseUrl: string;
   apiKey?: string;
   provider?: ProviderMode;
+  apiFormat?: "anthropic" | "openai";
   proxy?: ProxyConfig;
   /** 默认主模型 */
   defaultModel: string;
@@ -72,6 +73,7 @@ interface ModelConfig {
   temperature?: number;
   /** 提供商模式（自动配置 API 端点） */
   provider?: ProviderMode;
+  apiFormat?: "anthropic" | "openai";
   /** 分组标签 */
   group?: string;
   /** 代理配置 */

@@ -463,18 +463,18 @@ function setupIpcHandlers(): void {
   // 模型配置管理
   // ==========================================
 
-  const DEEPSEEK_BASE_URL = "https://api.deepseek.com/anthropic";
 
-  /** 按提供商模式规范化模型配置（如 DeepSeek 自动修正 baseURL） */
+  /** 按提供商模式规范化模型配置 */
   function normalizeModelConfig(config: ModelConfig): ModelConfig {
-    const provider =
-      config.provider ||
-      (config.baseUrl && config.baseUrl.includes("api.deepseek.com")
-        ? "deepseek"
-        : "custom");
-    if (provider === "deepseek") {
-      config.baseUrl = DEEPSEEK_BASE_URL;
-      config.provider = "deepseek";
+    // 自动推断 apiFormat（如果不明确指定）
+    if (!config.apiFormat) {
+      if (config.type === "third-party" && config.provider !== "deepseek") {
+        // 非 DeepSeek 的第三方 API 默认使用 OpenAI 格式
+        config.apiFormat = "openai";
+      } else {
+        // official、local、DeepSeek 使用 Anthropic Messages API 格式
+        config.apiFormat = "anthropic";
+      }
     }
     return config;
   }
@@ -634,9 +634,56 @@ function setupIpcHandlers(): void {
     return { success: true, data: profile };
   });
 
+  /**
+   * 同步活跃网关的 ModelConfig 并重新初始化 agent
+   */
+  async function syncActiveGatewayModel(profileId: string): Promise<void> {
+    const activeId = store.get("activeGatewayId") as string | null;
+    if (activeId !== profileId) return;
+
+    const profiles = store.get("gatewayProfiles") as GatewayProfile[];
+    const profile = profiles.find((p) => p.id === profileId);
+    if (!profile || !profile.defaultModel) return;
+
+    const modelConfig: ModelConfig = {
+      id: `gateway_model_${profileId}`,
+      name: `${profile.name} - ${profile.defaultModel}`,
+      type: profile.type,
+      baseUrl: profile.baseUrl,
+      apiKey: profile.apiKey,
+      modelName: profile.defaultModel,
+      proxy: profile.proxy,
+      provider: profile.provider,
+      apiFormat: profile.apiFormat || (
+        (profile.type === "third-party" && profile.provider !== "deepseek")
+          ? "openai" : "anthropic"
+      ),
+      maxTokens: 4096,
+      temperature: 0.7,
+      enabled: true,
+    };
+
+    const models = store.get("models") as ModelConfig[];
+    const existingIdx = models.findIndex((m) => m.id === modelConfig.id);
+    if (existingIdx >= 0) {
+      models[existingIdx] = modelConfig;
+    } else {
+      models.push(modelConfig);
+    }
+    store.set("models", models);
+    store.set("activeModelId", modelConfig.id);
+
+    if (claudeAgentInstance) {
+      await claudeAgentInstance.switchModel(modelConfig);
+    } else {
+      claudeAgentInstance = new ClaudeAgentManager();
+      await claudeAgentInstance.initialize(modelConfig);
+    }
+  }
+
   ipcMain.handle(
     "gateway:update",
-    (_event, profileId: string, updates: Partial<GatewayProfile>) => {
+    async (_event, profileId: string, updates: Partial<GatewayProfile>) => {
       const profiles = store.get("gatewayProfiles") as GatewayProfile[];
       const index = profiles.findIndex((p) => p.id === profileId);
       if (index === -1) return { success: false, error: "Gateway not found" };
@@ -646,6 +693,8 @@ function setupIpcHandlers(): void {
         updatedAt: new Date().toISOString(),
       };
       store.set("gatewayProfiles", profiles);
+      // 如果更新的是活跃网关，同步 ModelConfig 并重新初始化 agent
+      await syncActiveGatewayModel(profileId);
       return { success: true, data: profiles[index] };
     },
   );
@@ -673,41 +722,8 @@ function setupIpcHandlers(): void {
     store.set("gatewayProfiles", updated);
     store.set("activeGatewayId", profileId);
 
-    // Create a synthetic ModelConfig from the gateway profile and set it active
-    if (profile.defaultModel) {
-      const modelConfig: ModelConfig = {
-        id: `gateway_model_${profileId}`,
-        name: `${profile.name} - ${profile.defaultModel}`,
-        type: profile.type,
-        baseUrl: profile.baseUrl,
-        apiKey: profile.apiKey,
-        modelName: profile.defaultModel,
-        proxy: profile.proxy,
-        provider: profile.provider,
-        maxTokens: 4096,
-        temperature: 0.7,
-        enabled: true,
-      };
-
-      // Save/update this synthetic model in the models list
-      const models = store.get("models") as ModelConfig[];
-      const existingIdx = models.findIndex((m) => m.id === modelConfig.id);
-      if (existingIdx >= 0) {
-        models[existingIdx] = modelConfig;
-      } else {
-        models.push(modelConfig);
-      }
-      store.set("models", models);
-      store.set("activeModelId", modelConfig.id);
-
-      // Initialize/switch agent
-      if (claudeAgentInstance) {
-        await claudeAgentInstance.switchModel(modelConfig);
-      } else {
-        claudeAgentInstance = new ClaudeAgentManager();
-        await claudeAgentInstance.initialize(modelConfig);
-      }
-    }
+    // 复用 syncActiveGatewayModel 创建 ModelConfig 并初始化 agent
+    await syncActiveGatewayModel(profileId);
 
     return { success: true, data: updated.find((p) => p.id === profileId) };
   });
@@ -736,24 +752,32 @@ function setupIpcHandlers(): void {
       try {
         const url = profile.baseUrl || "https://api.anthropic.com";
         const startTime = Date.now();
+
+        // 根据 apiFormat 选择合适的测试端点
+        const apiFormat = profile.apiFormat || (
+          (profile.type === "third-party" && profile.provider !== "deepseek")
+            ? "openai" : "anthropic"
+        );
+
         let testUrl = url;
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
         };
 
-        if (profile.type === "official") {
+        if (profile.type === "local") {
+          testUrl = `${url.replace(/\/$/, "")}/api/tags`;
+        } else if (apiFormat === "anthropic") {
           testUrl = `${url.replace(/\/$/, "")}/v1/messages`;
           if (profile.apiKey) {
             headers["x-api-key"] = profile.apiKey;
             headers["anthropic-version"] = "2023-06-01";
           }
-        } else if (profile.type === "third-party") {
+        } else {
+          // OpenAI 兼容格式
           testUrl = `${url.replace(/\/$/, "")}/models`;
           if (profile.apiKey) {
             headers["Authorization"] = `Bearer ${profile.apiKey}`;
           }
-        } else {
-          testUrl = `${url.replace(/\/$/, "")}/api/tags`;
         }
 
         const fetchOptions: RequestInit = { method: "GET", headers };
@@ -794,20 +818,26 @@ function setupIpcHandlers(): void {
           "Content-Type": "application/json",
         };
 
+        // 根据 apiFormat 选择拉取模型的端点
+        const apiFormat = profile.apiFormat || (
+          (profile.type === "third-party" && profile.provider !== "deepseek")
+            ? "openai" : "anthropic"
+        );
+
         let modelsEndpoint = url;
-        if (profile.type === "official") {
+        if (profile.type === "local") {
+          modelsEndpoint = `${url.replace(/\/$/, "")}/api/tags`;
+        } else if (apiFormat === "anthropic") {
           modelsEndpoint = `${url.replace(/\/$/, "")}/v1/models`;
           if (profile.apiKey) {
             headers["x-api-key"] = profile.apiKey;
             headers["anthropic-version"] = "2023-06-01";
           }
-        } else if (profile.type === "third-party") {
+        } else {
           modelsEndpoint = `${url.replace(/\/$/, "")}/models`;
           if (profile.apiKey) {
             headers["Authorization"] = `Bearer ${profile.apiKey}`;
           }
-        } else {
-          modelsEndpoint = `${url.replace(/\/$/, "")}/api/tags`;
         }
 
         const fetchOptions: RequestInit = { method: "GET", headers };

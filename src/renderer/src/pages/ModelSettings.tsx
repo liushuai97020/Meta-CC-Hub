@@ -396,6 +396,33 @@ const ActiveBanner: React.FC<{ profile: GatewayProfile }> = ({ profile }) => {
   );
 };
 
+/**
+ * 已知提供商的 URL 格式映射，用于切换 API 格式时自动切换 baseUrl
+ */
+const KNOWN_PROVIDER_URLS: Array<{
+  match: (url: string) => boolean;
+  anthropic: string;
+  openai: string;
+}> = [
+  {
+    match: (url) => url.includes("api.deepseek.com"),
+    anthropic: "https://api.deepseek.com/anthropic",
+    openai: "https://api.deepseek.com",
+  },
+];
+
+function getBaseUrlForFormat(
+  currentUrl: string,
+  targetFormat: "anthropic" | "openai",
+): string | null {
+  for (const provider of KNOWN_PROVIDER_URLS) {
+    if (provider.match(currentUrl)) {
+      return provider[targetFormat];
+    }
+  }
+  return null;
+}
+
 // ========================
 // 网关配置卡片
 // ========================
@@ -423,8 +450,60 @@ const GatewayCard: React.FC<GatewayCardProps> = ({
   testing,
   pulling,
 }) => {
-  const [expanded, setExpanded] = useState(false);
-  const typeCfg = TYPE_CONFIG[profile.type];
+  const [editing, setEditing] = useState(false);
+  const [editData, setEditData] = useState<GatewayProfile | null>(null);
+
+  const isEditing = editing && editData !== null;
+  const displayProfile = isEditing ? editData! : profile;
+
+  const startEditing = () => {
+    setEditData({ ...profile });
+    setEditing(true);
+  };
+
+  const cancelEditing = () => {
+    setEditData(null);
+    setEditing(false);
+  };
+
+  const saveEditing = () => {
+    if (editData) {
+      onUpdate(editData);
+    }
+    setEditData(null);
+    setEditing(false);
+  };
+
+  const handleUpdate = (updates: Partial<GatewayProfile>) => {
+    if (isEditing) {
+      setEditData({ ...editData!, ...updates });
+    } else {
+      onUpdate(updates);
+    }
+  };
+
+  const handleApiFormatChange = (fmt: "anthropic" | "openai") => {
+    if (isEditing) {
+      const newUrl = getBaseUrlForFormat(editData!.baseUrl, fmt);
+      setEditData({
+        ...editData!,
+        apiFormat: fmt,
+        ...(newUrl ? { baseUrl: newUrl } : {}),
+      });
+    } else {
+      const newUrl = getBaseUrlForFormat(profile.baseUrl, fmt);
+      onUpdate({
+        apiFormat: fmt,
+        ...(newUrl ? { baseUrl: newUrl } : {}),
+      });
+    }
+  };
+
+  const handleSlotChange = (key: string, val: string) => {
+    handleUpdate({ [key]: val });
+  };
+
+  const typeCfg = TYPE_CONFIG[displayProfile.type];
   const TypeIcon = typeCfg.icon;
 
   return (
@@ -434,6 +513,7 @@ const GatewayCard: React.FC<GatewayCardProps> = ({
         isActive
           ? "border-primary/40 bg-primary/[0.02] shadow-sm shadow-primary/5"
           : "border-border hover:border-muted-foreground/20",
+        isEditing && "ring-1 ring-primary/20",
       )}
     >
       {/* 顶部：图标 + 名称 + 开关 + 删除 */}
@@ -448,11 +528,19 @@ const GatewayCard: React.FC<GatewayCardProps> = ({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium truncate">{profile.name}</span>
-            <StatusDot status={profile.connectionStatus || "unknown"} />
+            {isEditing ? (
+              <Input
+                className="h-7 text-sm font-medium"
+                value={editData!.name}
+                onChange={(e) => setEditData({ ...editData!, name: e.target.value })}
+              />
+            ) : (
+              <span className="text-sm font-medium truncate">{profile.name}</span>
+            )}
+            <StatusDot status={displayProfile.connectionStatus || "unknown"} />
           </div>
           <code className="text-[11px] text-muted-foreground font-mono truncate block mt-0.5">
-            {profile.baseUrl}
+            {displayProfile.baseUrl}
           </code>
         </div>
         <div className="flex items-center gap-2">
@@ -496,16 +584,30 @@ const GatewayCard: React.FC<GatewayCardProps> = ({
           {pulling ? "拉取中" : "拉取"}
         </button>
         <button
-          className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-[11px] text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-          onClick={() => setExpanded(!expanded)}
+          className={cn(
+            "inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-[11px] transition-colors",
+            isEditing
+              ? "bg-primary/10 text-primary border border-primary/30"
+              : "text-muted-foreground hover:text-foreground hover:bg-accent",
+          )}
+          onClick={() => (isEditing ? cancelEditing() : startEditing())}
         >
           <Settings className="h-3 w-3" />
-          {expanded ? "收起" : "更多"}
+          {isEditing ? "取消" : "编辑"}
         </button>
         {profile.availableModels.length > 0 && (
           <span className="text-[10px] text-muted-foreground/50 ml-auto">
             {profile.availableModels.length} 个模型
           </span>
+        )}
+        {isEditing && (
+          <button
+            className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md text-[11px] bg-emerald-500/10 text-emerald-500 border border-emerald-500/30 hover:bg-emerald-500/20 transition-colors ml-auto"
+            onClick={saveEditing}
+          >
+            <Check className="h-3 w-3" />
+            保存
+          </button>
         )}
       </div>
 
@@ -518,15 +620,15 @@ const GatewayCard: React.FC<GatewayCardProps> = ({
             icon={s.icon}
             color={s.color}
             bg={s.bg}
-            value={profile[s.key]}
-            models={profile.availableModels}
-            onChange={(val) => onUpdate({ [s.key]: val })}
+            value={displayProfile[s.key]}
+            models={displayProfile.availableModels}
+            onChange={(val) => handleSlotChange(s.key, val)}
           />
         ))}
       </div>
 
-      {/* 展开的详细配置 */}
-      {expanded && (
+      {/* 编辑区 */}
+      {isEditing && (
         <div className="px-4 pb-4 space-y-3 border-t border-border/40 pt-3">
           {/* Base URL */}
           <div>
@@ -535,12 +637,14 @@ const GatewayCard: React.FC<GatewayCardProps> = ({
             </label>
             <Input
               className="h-8 text-xs mt-1 font-mono"
-              value={profile.baseUrl}
-              onChange={(e) => onUpdate({ baseUrl: e.target.value })}
+              value={editData!.baseUrl}
+              onChange={(e) =>
+                setEditData({ ...editData!, baseUrl: e.target.value })
+              }
             />
           </div>
           {/* API Key */}
-          {(profile.type === "official" || profile.type === "third-party") && (
+          {(editData!.type === "official" || editData!.type === "third-party") && (
             <div>
               <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
                 API Key
@@ -548,27 +652,61 @@ const GatewayCard: React.FC<GatewayCardProps> = ({
               <Input
                 className="h-8 text-xs mt-1 font-mono"
                 type="password"
-                value={profile.apiKey || ""}
-                onChange={(e) => onUpdate({ apiKey: e.target.value })}
+                value={editData!.apiKey || ""}
+                onChange={(e) =>
+                  setEditData({ ...editData!, apiKey: e.target.value })
+                }
                 placeholder={
-                  profile.type === "official" ? "sk-ant-..." : "sk-..."
+                  editData!.type === "official" ? "sk-ant-..." : "sk-..."
                 }
               />
             </div>
           )}
           {/* 代理 */}
           <ProxyForm
-            proxy={profile.proxy}
-            onChange={(proxy) => onUpdate({ proxy })}
+            proxy={editData!.proxy}
+            onChange={(proxy) => setEditData({ ...editData!, proxy })}
           />
+          {/* API 格式选择 */}
+          {editData!.type !== "local" && (
+            <div>
+              <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
+                API 格式
+              </label>
+              <div className="flex gap-2 mt-1">
+                <button
+                  className={cn(
+                    "px-3 py-1.5 rounded-md text-[11px] border transition-all",
+                    (!editData!.apiFormat || editData!.apiFormat === "anthropic")
+                      ? "border-primary/50 bg-primary/10 text-primary"
+                      : "border-border/60 text-muted-foreground hover:border-muted-foreground/30",
+                  )}
+                  onClick={() => handleApiFormatChange("anthropic")}
+                >
+                  Anthropic Messages API
+                </button>
+                <button
+                  className={cn(
+                    "px-3 py-1.5 rounded-md text-[11px] border transition-all",
+                    editData!.apiFormat === "openai"
+                      ? "border-primary/50 bg-primary/10 text-primary"
+                      : "border-border/60 text-muted-foreground hover:border-muted-foreground/30",
+                  )}
+                  onClick={() => handleApiFormatChange("openai")}
+                >
+                  OpenAI 兼容格式
+                </button>
+              </div>
+            </div>
+          )}
           {/* 已拉取模型 */}
           <div>
             <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
               已拉取模型
             </label>
-            {profile.availableModels.length > 0 ? (
+            {editData!.availableModels.length > 0 ? (
               <div className="flex flex-wrap gap-1 mt-1.5">
-                {profile.availableModels.map((m) => (
+                {editData!.availableModels.map((m) => (
                   <span
                     key={m}
                     className="px-2 py-0.5 rounded text-[10px] font-mono bg-muted/50 border border-border/50 text-muted-foreground"
@@ -585,7 +723,10 @@ const GatewayCard: React.FC<GatewayCardProps> = ({
             <div className="mt-2">
               <ManualModelInput
                 onAdd={(m) =>
-                  onUpdate({ availableModels: [...profile.availableModels, m] })
+                  setEditData({
+                    ...editData!,
+                    availableModels: [...editData!.availableModels, m],
+                  })
                 }
               />
             </div>
@@ -597,6 +738,124 @@ const GatewayCard: React.FC<GatewayCardProps> = ({
 };
 
 // ========================
+// 主流模型快捷预设
+// ========================
+
+interface QuickPreset {
+  label: string;
+  type: ModelType;
+  /** 不同 API 格式对应的 baseUrl */
+  baseUrls: {
+    anthropic: string;
+    openai: string;
+  };
+  /** 默认 API 格式 */
+  defaultApiFormat: "anthropic" | "openai";
+  /** 提供商模式 */
+  provider?: "custom" | "deepseek";
+  apiKeyHint?: string;
+  models: string[];
+}
+
+const QUICK_PRESETS: QuickPreset[] = [
+  {
+    label: "Anthropic Claude",
+    type: "official",
+    baseUrls: { anthropic: "https://api.anthropic.com", openai: "https://api.anthropic.com" },
+    defaultApiFormat: "anthropic",
+    apiKeyHint: "sk-ant-...",
+    models: ["claude-sonnet-4-6", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
+  },
+  {
+    label: "OpenAI",
+    type: "third-party",
+    baseUrls: { anthropic: "https://api.openai.com/v1", openai: "https://api.openai.com/v1" },
+    defaultApiFormat: "openai",
+    apiKeyHint: "sk-...",
+    models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1", "o3-mini"],
+  },
+  {
+    label: "Google Gemini",
+    type: "third-party",
+    baseUrls: { anthropic: "https://generativelanguage.googleapis.com/v1beta", openai: "https://generativelanguage.googleapis.com/v1beta" },
+    defaultApiFormat: "openai",
+    apiKeyHint: "AIza...",
+    models: ["gemini-2.0-flash", "gemini-2.0-pro", "gemini-1.5-pro", "gemini-1.5-flash"],
+  },
+  {
+    label: "DeepSeek",
+    type: "third-party",
+    baseUrls: { anthropic: "https://api.deepseek.com/anthropic", openai: "https://api.deepseek.com" },
+    defaultApiFormat: "openai",
+    provider: "deepseek",
+    apiKeyHint: "sk-...",
+    models: ["deepseek-chat", "deepseek-reasoner"],
+  },
+  {
+    label: "通义千问 (Qwen)",
+    type: "third-party",
+    baseUrls: { anthropic: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", openai: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1" },
+    defaultApiFormat: "openai",
+    apiKeyHint: "sk-...",
+    models: ["qwen-turbo", "qwen-plus", "qwen-max", "qwen2.5-72b-instruct"],
+  },
+  {
+    label: "智谱 GLM",
+    type: "third-party",
+    baseUrls: { anthropic: "https://open.bigmodel.cn/api/paas/v4", openai: "https://open.bigmodel.cn/api/paas/v4" },
+    defaultApiFormat: "openai",
+    apiKeyHint: "",
+    models: ["glm-4-plus", "glm-4-0520", "glm-4-air", "glm-4-flash"],
+  },
+  {
+    label: "月之暗面 Moonshot",
+    type: "third-party",
+    baseUrls: { anthropic: "https://api.moonshot.cn/v1", openai: "https://api.moonshot.cn/v1" },
+    defaultApiFormat: "openai",
+    apiKeyHint: "sk-...",
+    models: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+  },
+  {
+    label: "DeepSeek 本地",
+    type: "local",
+    baseUrls: { anthropic: "http://localhost:11434", openai: "http://localhost:11434" },
+    defaultApiFormat: "openai",
+    models: ["deepseek-coder", "deepseek-chat"],
+  },
+  {
+    label: "SiliconFlow",
+    type: "third-party",
+    baseUrls: { anthropic: "https://api.siliconflow.cn/v1", openai: "https://api.siliconflow.cn/v1" },
+    defaultApiFormat: "openai",
+    apiKeyHint: "sk-...",
+    models: ["deepseek-v3", "deepseek-r1", "Qwen/Qwen2.5-72B-Instruct", "THUDM/glm-4-9b-chat"],
+  },
+  {
+    label: "零一万物 Yi",
+    type: "third-party",
+    baseUrls: { anthropic: "https://api.lingyiwanwu.com/v1", openai: "https://api.lingyiwanwu.com/v1" },
+    defaultApiFormat: "openai",
+    apiKeyHint: "",
+    models: ["yi-lightning", "yi-large", "yi-medium"],
+  },
+  {
+    label: "MiniMax",
+    type: "third-party",
+    baseUrls: { anthropic: "https://api.minimax.chat/v1", openai: "https://api.minimax.chat/v1" },
+    defaultApiFormat: "openai",
+    apiKeyHint: "",
+    models: ["MiniMax-Text-01", "abab6.5s", "abab5.5"],
+  },
+  {
+    label: "Ollama 本地",
+    type: "local",
+    baseUrls: { anthropic: "http://localhost:11434", openai: "http://localhost:11434" },
+    defaultApiFormat: "openai",
+    models: ["llama3", "qwen2", "mistral", "codellama"],
+  },
+];
+
+// ========================
 // 新建配置卡片
 // ========================
 
@@ -605,8 +864,14 @@ interface NewCardProps {
   onCancel: () => void;
 }
 
+function deriveApiFormat(type: ModelType): "anthropic" | "openai" {
+  return type === "official" ? "anthropic" : type === "local" ? "openai" : "openai";
+}
+
 const NewCard: React.FC<NewCardProps> = ({ onSave, onCancel }) => {
   const [type, setType] = useState<ModelType>("official");
+  const [apiFormat, setApiFormat] = useState<"anthropic" | "openai">("anthropic");
+  const [provider, setProvider] = useState<"custom" | "deepseek" | undefined>();
   const [name, setName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -626,13 +891,60 @@ const NewCard: React.FC<NewCardProps> = ({ onSave, onCancel }) => {
     error?: string;
   } | null>(null);
   const [pullError, setPullError] = useState("");
+  const [activePresetLabel, setActivePresetLabel] = useState<string | null>(null);
   const { testConnection, pullModels } = useGatewayStore();
+
+  const applyPreset = (preset: QuickPreset) => {
+    setType(preset.type);
+    setApiFormat(preset.defaultApiFormat);
+    setProvider(preset.provider);
+    setBaseUrl(preset.baseUrls[preset.defaultApiFormat]);
+    setApiKey("");
+    setProxy(undefined);
+    setAvailableModels([...preset.models]);
+    // 清空模型槽位，让用户手动选择或拉取
+    setDefaultModel("");
+    setExpertModel("");
+    setSmallModel("");
+    setAnalysisModel("");
+    setImageModel("");
+    setName(preset.label);
+    setTestResult(null);
+    setPullError("");
+    setActivePresetLabel(preset.label);
+  };
+
+  const handleApiFormatChange = (fmt: "anthropic" | "openai") => {
+    setApiFormat(fmt);
+    if (activePresetLabel) {
+      const preset = QUICK_PRESETS.find((p) => p.label === activePresetLabel);
+      if (preset) {
+        setBaseUrl(preset.baseUrls[fmt]);
+      }
+    }
+  };
+
+  const handleBaseUrlChange = (val: string) => {
+    setBaseUrl(val);
+    if (activePresetLabel) setActivePresetLabel(null);
+  };
+
+  const handleNameChange = (val: string) => {
+    setName(val);
+  };
+
+  const handleTypeChange = (t: ModelType) => {
+    setType(t);
+    setApiFormat(deriveApiFormat(t));
+    setProvider(undefined);
+    setActivePresetLabel(null);
+  };
 
   const handleTest = async () => {
     setTesting(true);
     setTestResult(null);
     try {
-      setTestResult(await testConnection({ baseUrl, apiKey, type, proxy }));
+      setTestResult(await testConnection({ baseUrl, apiKey, type, apiFormat, proxy }));
     } catch (e: any) {
       setTestResult({ success: false, error: String(e) });
     }
@@ -643,7 +955,7 @@ const NewCard: React.FC<NewCardProps> = ({ onSave, onCancel }) => {
     setPulling(true);
     setPullError("");
     try {
-      const result = await pullModels({ baseUrl, apiKey, type, proxy });
+      const result = await pullModels({ baseUrl, apiKey, type, apiFormat, proxy });
       if (result.success && result.models) setAvailableModels(result.models);
       else setPullError(result.error || "拉取失败");
     } catch {
@@ -661,6 +973,8 @@ const NewCard: React.FC<NewCardProps> = ({ onSave, onCancel }) => {
         type,
         baseUrl: baseUrl.trim(),
         apiKey: apiKey || undefined,
+        apiFormat,
+        provider,
         proxy,
         defaultModel,
         expertModel,
@@ -719,7 +1033,7 @@ const NewCard: React.FC<NewCardProps> = ({ onSave, onCancel }) => {
         <div className="flex-1 min-w-0">
           <Input
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => handleNameChange(e.target.value)}
             placeholder="配置名称"
             className="h-8 text-sm font-medium"
           />
@@ -727,6 +1041,25 @@ const NewCard: React.FC<NewCardProps> = ({ onSave, onCancel }) => {
       </div>
 
       <div className="px-4 space-y-3 pb-4">
+        {/* 快捷预设 */}
+        <div>
+          <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider mb-1.5 block">
+            快捷预设
+          </label>
+          <div className="flex flex-wrap gap-1.5">
+            {QUICK_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                className="px-2.5 py-1 rounded-md border text-[11px] transition-all border-border hover:border-primary/40 hover:bg-primary/5 text-muted-foreground hover:text-foreground"
+                onClick={() => applyPreset(p)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* 类型 */}
         <div className="flex gap-1.5">
           {(["official", "third-party", "local"] as const).map((t) => {
@@ -742,7 +1075,7 @@ const NewCard: React.FC<NewCardProps> = ({ onSave, onCancel }) => {
                     ? "border-primary bg-primary/10 text-primary"
                     : "border-border hover:bg-accent text-muted-foreground",
                 )}
-                onClick={() => setType(t)}
+                onClick={() => handleTypeChange(t)}
               >
                 <Icon className="h-3.5 w-3.5" /> {cfg.label}
               </button>
@@ -759,7 +1092,7 @@ const NewCard: React.FC<NewCardProps> = ({ onSave, onCancel }) => {
             <Input
               className="h-8 text-xs font-mono"
               value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
+              onChange={(e) => handleBaseUrlChange(e.target.value)}
               placeholder={
                 type === "official"
                   ? "https://api.anthropic.com"
@@ -785,6 +1118,39 @@ const NewCard: React.FC<NewCardProps> = ({ onSave, onCancel }) => {
 
         {/* 代理 */}
         <ProxyForm proxy={proxy} onChange={setProxy} />
+
+        {/* API 格式选择 */}
+        {type !== "local" && (
+          <div>
+            <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">
+              API 格式
+            </label>
+            <div className="flex gap-2 mt-1">
+              <button
+                className={cn(
+                  "px-3 py-1.5 rounded-md text-[11px] border transition-all",
+                  apiFormat === "anthropic"
+                    ? "border-primary/50 bg-primary/10 text-primary"
+                    : "border-border/60 text-muted-foreground hover:border-muted-foreground/30",
+                )}
+                onClick={() => handleApiFormatChange("anthropic")}
+              >
+                Anthropic Messages API
+              </button>
+              <button
+                className={cn(
+                  "px-3 py-1.5 rounded-md text-[11px] border transition-all",
+                  apiFormat === "openai"
+                    ? "border-primary/50 bg-primary/10 text-primary"
+                    : "border-border/60 text-muted-foreground hover:border-muted-foreground/30",
+                )}
+                onClick={() => handleApiFormatChange("openai")}
+              >
+                OpenAI 兼容格式
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* 测试+拉取 */}
         <div className="flex items-center gap-2">

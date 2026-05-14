@@ -38,6 +38,8 @@ export interface GatewayProfile {
   apiKey?: string;
   /** 提供商模式 */
   provider?: "custom" | "deepseek";
+  /** API 格式，auto 表示根据 type 自动推断 */
+  apiFormat?: "anthropic" | "openai";
   /** 代理配置 */
   proxy?: ProxyConfig;
 
@@ -76,6 +78,8 @@ export interface ModelConfig {
   modelName?: string;
   maxTokens?: number;
   temperature?: number;
+  /** API 格式，默认根据 type 推断 */
+  apiFormat?: "anthropic" | "openai";
   /** 分组标签 */
   group?: string;
   /** 代理配置 */
