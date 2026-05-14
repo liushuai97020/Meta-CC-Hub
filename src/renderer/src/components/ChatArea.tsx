@@ -22,10 +22,20 @@ const DROP_STYLES = new Set([
   "block",
   "border-box",
 ]);
+// 排除标注模式可能混入的样式属性
+const DROP_STYLE_KEYS = new Set([
+  "cursor",
+  "outline",
+  "outlineColor",
+  "outlineWidth",
+  "outlineStyle",
+  "outlineOffset",
+]);
 const compactStyles = (s: Record<string, string>): Record<string, string> => {
   if (!s || typeof s !== "object") return {};
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(s)) {
+    if (DROP_STYLE_KEYS.has(k)) continue;
     if (v && !DROP_STYLES.has(v)) out[k] = v;
   }
   return out;
@@ -123,73 +133,38 @@ import {
 import { Button } from "./ui/button";
 
 // ========================
-// 工具调用结果卡片
-// ========================
-
-interface ToolOutputCardProps {
-  toolCall: ToolCallResult;
-}
-
-const ToolOutputCard: React.FC<ToolOutputCardProps> = ({ toolCall }) => {
-  const statusIcon = {
-    success: <CheckCircle2 className="h-4 w-4 text-green-500" />,
-    error: <XCircle className="h-4 w-4 text-red-500" />,
-  };
-
-  return (
-    <div
-      className={cn(
-        "tool-output-card",
-        toolCall.status === "success" ? "success" : "error",
-      )}
-    >
-      <div className="flex items-center gap-2 mb-1">
-        <Terminal className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-xs font-mono font-medium">
-          {toolCall.toolName}
-        </span>
-        {statusIcon[toolCall.status]}
-      </div>
-      {toolCall.status === "error" && toolCall.error && (
-        <div className="text-xs text-red-500 mt-1">{toolCall.error}</div>
-      )}
-      {toolCall.output !== undefined && toolCall.output !== null && (
-        <pre className="text-xs mt-1 bg-muted p-2 rounded overflow-x-auto max-h-32">
-          <code>{String(JSON.stringify(toolCall.output, null, 2))}</code>
-        </pre>
-      )}
-    </div>
-  );
-};
-
 // ========================
 // 消息气泡组件
 // ========================
 
 interface MessageBubbleProps {
   message: ChatMessage;
+  isStreaming?: boolean;
 }
 
-const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
+const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isStreaming }) => {
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
 
   return (
     <div
       className={cn(
-        "flex gap-3 mb-4",
-        isUser ? "justify-end" : "justify-start",
+        "flex gap-2 mb-4 items-start",
+        isUser && "flex-row-reverse",
       )}
     >
-      {/* 头像 */}
-      {isAssistant && (
-        <div className="flex-shrink-0 h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center">
-          <Bot className="h-4 w-4 text-primary" />
-        </div>
-      )}
+      {/* 头像——始终在 DOM 首位；用户消息通过 flex-row-reverse 放到右侧 */}
+      <div className={cn(
+        "flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center",
+        isUser
+          ? "bg-secondary text-secondary-foreground"
+          : "bg-primary/20",
+      )}>
+        {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4 text-primary" />}
+      </div>
 
       {/* 消息内容 */}
-      <div className="flex flex-col max-w-[75%] w-fit">
+      <div className="flex flex-col min-w-0 max-w-[75%]">
         <div
           className={cn(
             "message-bubble",
@@ -224,8 +199,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
                         <Copy className="h-3 w-3" />
                       </button>
                     </div>
-                    <pre className="text-xs bg-editor-bg border border-t-0 border-editor-border rounded-b-md p-3 overflow-x-auto">
-                      <code className="block whitespace-pre">{code}</code>
+                    <pre className="text-xs bg-editor-bg border border-t-0 border-editor-border rounded-b-md p-3 overflow-x-auto max-w-full w-full">
+                      <code className="block whitespace-pre-wrap break-words">{code}</code>
                     </pre>
                   </div>
                 );
@@ -254,12 +229,14 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
             })}
           </div>
 
-          {/* 工具调用结果 */}
-          {message.toolCalls && message.toolCalls.length > 0 && (
-            <div className="mt-2 space-y-1">
-              {message.toolCalls.map((toolCall, index) => (
-                <ToolOutputCard key={index} toolCall={toolCall} />
-              ))}
+          {/* 思考中指示器（未输出文本时显示） */}
+          {isStreaming && !message.content && (
+            <div className="flex items-center gap-1.5 py-2">
+              <span className="flex gap-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-primary/50 animate-bounce" style={{ animationDelay: '0ms' }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-primary/50 animate-bounce" style={{ animationDelay: '150ms' }} />
+                <span className="w-1.5 h-1.5 rounded-full bg-primary/50 animate-bounce" style={{ animationDelay: '300ms' }} />
+              </span>
             </div>
           )}
         </div>
@@ -275,12 +252,6 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
         </span>
       </div>
 
-      {/* 用户头像 */}
-      {isUser && (
-        <div className="flex-shrink-0 h-8 w-8 rounded-full bg-secondary flex items-center justify-center">
-          <User className="h-4 w-4 text-secondary-foreground" />
-        </div>
-      )}
     </div>
   );
 };
@@ -407,9 +378,9 @@ const ChatArea: React.FC = () => {
     !!activeModelId ||
     (!!activeProfile && !!activeProfile.defaultModel && !!activeProfileId);
 
-  // 自动滚动到底部
+  // 自动滚动到底部（使用 auto 避免切换会话时的滚动动画）
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
   }, [activeSession?.messages]);
 
   // 组件卸载时清理流式监听器
@@ -654,25 +625,31 @@ const ChatArea: React.FC = () => {
         const ei = task.elementInfo;
         let codeBlock = "";
         if (ei) {
+          // 将 DOM 属性名转为 JSX 属性名，避免 agent 因 class/className 差异而困惑
+          const isJsx = filePath && /\.(tsx|jsx)$/i.test(filePath);
           const attrs = (ei.attributes || [])
+            .filter(function (a) {
+              // 过滤掉 style 属性：runtime 计算值，不是 JSX 源中的写法
+              return a.name !== 'style';
+            })
             .map(function (a) {
-              return a.name + '="' + a.value + '"';
+              var name = a.name;
+              if (isJsx && name === 'class') name = 'className';
+              return name + '="' + a.value + '"';
             })
             .join(" ");
           var openTag = attrs
             ? "<" + ei.tagName + " " + attrs + ">"
             : "<" + ei.tagName + ">";
-          var closeTag = "</" + ei.tagName + ">";
-          var tagContent = ei.textContent
-            ? ei.textContent.substring(0, 100)
-            : "";
-          var inner = tagContent
-            ? openTag + "\n" + tagContent + "\n" + closeTag
-            : openTag;
+          // 只展示结构不展示内容，避免 agent 误以为要替换整个元素
+          var inner = openTag + "\n  ...\n" + "</" + ei.tagName + ">";
           codeBlock = "\n\n\`\`\`html\n" + inner + "\n\`\`\`";
         }
+        const instruction = task.text || "";
+        // 如果指令明确提到改标签/结构，不加约束；否则默认保持
+        const isStructuralChange = /(改.*标签|标签.*改|改成|换成|变成|变为).*(div|span|p|a|button|section|header|footer|article|nav|main|aside|h[1-6])/i.test(instruction);
         return task.text
-          ? header + codeBlock + "\n" + task.text
+          ? header + codeBlock + "\n\n修改要求: " + task.text + (isStructuralChange ? "" : "\n(标签名和结构保持不变)")
           : header + codeBlock;
       });
       const annotationMsg = parts.join("\n\n");
@@ -909,10 +886,14 @@ const ChatArea: React.FC = () => {
         </div>
       )}
       {/* 消息列表 */}
-      <div className="flex-1 overflow-y-auto px-4 py-4">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-4">
         {activeSession && activeSession.messages.length > 0 ? (
-          activeSession.messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} />
+          activeSession.messages.map((msg, idx) => (
+            <MessageBubble
+              key={msg.id}
+              message={msg}
+              isStreaming={isSending && idx === activeSession.messages.length - 1}
+            />
           ))
         ) : (
           <div className="h-full flex items-center justify-center">

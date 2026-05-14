@@ -28,6 +28,7 @@
     ],
     "icon": "build/icon",
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis",
         "portable"

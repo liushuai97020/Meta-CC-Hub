@@ -270,12 +270,26 @@ interface PreviewPanelProps {
  * 支持多标签 BrowserView 预览 + DOM 节点标注
  */
 const PreviewPanel: React.FC<PreviewPanelProps> = ({ isVisible }) => {
-  const [tabs, setTabs] = useState<PreviewTab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string | null>(null);
-  const [url, setUrl] = useState("");
+  // 从 store 恢复预览状态（跨设置页面导航保持）
+  const [tabs, setTabs] = useState<PreviewTab[]>(() => useAppStore.getState().previewTabs || []);
+  const [activeTabId, setActiveTabId] = useState<string | null>(() => useAppStore.getState().previewActiveTabId);
+  const [url, setUrl] = useState(() => useAppStore.getState().previewUrl || "");
   const [showUrlHistory, setShowUrlHistory] = useState(false);
   const urlInputRef = useRef<HTMLInputElement>(null);
   const urlHistoryRef = useRef<HTMLDivElement>(null);
+
+  // 同步本地状态到 store
+  useEffect(() => {
+    useAppStore.getState().setPreviewTabs(tabs);
+  }, [tabs]);
+  useEffect(() => {
+    if (activeTabId !== useAppStore.getState().previewActiveTabId) {
+      useAppStore.getState().setPreviewActiveTabId(activeTabId);
+    }
+  }, [activeTabId]);
+  useEffect(() => {
+    useAppStore.getState().setPreviewUrl(url);
+  }, [url]);
 
   // 标注状态
   const { isAnnotationMode, setAnnotationMode, addAnnotationTask, clearAnnotationTasks, setCurrentPreviewUrl, previewUrlHistory, addPreviewUrl } = useAppStore();
@@ -342,6 +356,8 @@ const PreviewPanel: React.FC<PreviewPanelProps> = ({ isVisible }) => {
     const handler = (data: unknown) => {
       const { tabId, title } = data as { tabId: string; title: string };
       setTabs((prev) => prev.map((t) => (t.id === tabId ? { ...t, title } : t)));
+      // 页面加载/导航时关闭 URL 历史弹窗（BrowserView 点击不触发 document mousedown）
+      setShowUrlHistory(false);
       if (annotationModeRef.current && tabId === activeTabIdRef.current) {
         const theme = useAppStore.getState().theme;
         window.electronAPI.preview.executeJavaScript(`window.postMessage({ type: 'START_ANNOTATION_MODE', theme: '${theme}' }, '*');`).catch(() => {});
@@ -354,8 +370,7 @@ const PreviewPanel: React.FC<PreviewPanelProps> = ({ isVisible }) => {
   // 点击外部关闭 URL 历史下拉
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (urlHistoryRef.current && !urlHistoryRef.current.contains(e.target as Node) &&
-          urlInputRef.current && !urlInputRef.current.contains(e.target as Node)) {
+      if (urlHistoryRef.current && !urlHistoryRef.current.contains(e.target as Node)) {
         setShowUrlHistory(false);
       }
     };
@@ -414,6 +429,7 @@ const PreviewPanel: React.FC<PreviewPanelProps> = ({ isVisible }) => {
     setUrl(tab.url);
     setActiveTabId(tabId);
     setCurrentPreviewUrl(tab.url);
+    setShowUrlHistory(false);
 
     await window.electronAPI.preview.switchTab(tabId);
     setTimeout(scheduleBoundsUpdate, 100);
@@ -507,6 +523,12 @@ const PreviewPanel: React.FC<PreviewPanelProps> = ({ isVisible }) => {
 
   useEffect(() => {
     const handler = (data: unknown) => {
+      // 预览页面点击事件（关闭 URL 历史弹窗）
+      const msgType = (data as Record<string, unknown>).type;
+      if (msgType === "__previewClick") {
+        setShowUrlHistory(false);
+        return;
+      }
       const payload = data as { type: string; data: { elementInfo: ElementAnnotation; highlightId: string; text?: string } };
       if (payload.type === "annotation-note") {
         const state = useAppStore.getState();
@@ -621,7 +643,16 @@ const PreviewPanel: React.FC<PreviewPanelProps> = ({ isVisible }) => {
             ref={urlInputRef}
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            onFocus={() => previewUrlHistory.length > 0 && setShowUrlHistory(true)}
+            onMouseDown={() => {
+              if (previewUrlHistory.length > 0) {
+                setShowUrlHistory(true);
+              }
+            }}
+            onFocus={() => {
+              if (previewUrlHistory.length > 0) {
+                setShowUrlHistory(true);
+              }
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter") handleNavigate();
               if (e.key === "Escape") setShowUrlHistory(false);
@@ -883,7 +914,7 @@ const TracePanel: React.FC = () => {
  * 包含预览、代码查看和轨迹三个子面板的切换
  */
 const RightPanel: React.FC = () => {
-  const { rightPanelOpen, rightPanelWidth, rightPanelTab, setRightPanelTab } =
+  const { rightPanelOpen, rightPanelTab, setRightPanelTab } =
     useAppStore();
 
   if (!rightPanelOpen) return null;
@@ -891,7 +922,7 @@ const RightPanel: React.FC = () => {
   return (
     <div
       className="flex flex-col h-full bg-card border-l border-border mt-8"
-      style={{ width: `${rightPanelWidth}px`, minWidth: "300px" }}
+      style={{ width: 'var(--right-panel-width, 420px)', minWidth: "300px" }}
     >
       {/* 面板切换标签 - 三Tab */}
       <div className="flex border-b border-border">

@@ -76,10 +76,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     try {
       const sessions = await window.electronAPI.sessions.getAll();
       const activeSession = await window.electronAPI.sessions.getActive();
+      const activeId = activeSession?.id || (sessions.length > 0 ? sessions[0].id : null);
+      // 持久化 fallback 的 activeSessionId（如首次启动时无活跃会话）
+      if (activeId && !activeSession?.id) {
+        await window.electronAPI.sessions.setActive(activeId);
+      }
       set({
         sessions,
-        activeSessionId:
-          activeSession?.id || (sessions.length > 0 ? sessions[0].id : null),
+        activeSessionId: activeId,
         initialized: true,
       });
     } catch (error) {
@@ -100,6 +104,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       };
       const result = await window.electronAPI.sessions.create(session);
       if (result.success && result.data) {
+        // 持久化 activeSessionId，确保重启后能正确恢复
+        await window.electronAPI.sessions.setActive(result.data.id);
         set((state) => ({
           sessions: [...state.sessions, result.data!],
           activeSessionId: result.data!.id,
@@ -132,6 +138,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       };
       const result = await window.electronAPI.sessions.create(session);
       if (result.success && result.data) {
+        await window.electronAPI.sessions.setActive(result.data.id);
         set((state) => ({
           sessions: [...state.sessions, result.data!],
           activeSessionId: result.data!.id,

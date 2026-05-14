@@ -83,7 +83,7 @@ function applyTheme(theme: "light" | "dark") {
 }
 
 const App: React.FC = () => {
-  const { theme, showSettings, setSidebarWidth, setRightPanelWidth } = useAppStore();
+  const { theme, showSettings } = useAppStore();
   const { loadModels } = useModelStore();
   const { loadSessions } = useSessionStore();
   const { loadProfiles } = useGatewayStore();
@@ -143,6 +143,13 @@ const App: React.FC = () => {
     loadProfiles();
     useAppStore.getState().loadRecentProjects();
     useAppStore.getState().loadPreviewUrlHistory();
+
+    // 设置 CSS 变量初始值（拖拽性能优化用）
+    const el = containerRef.current;
+    if (el) {
+      el.style.setProperty('--sidebar-width', useAppStore.getState().sidebarWidth + 'px');
+      el.style.setProperty('--right-panel-width', useAppStore.getState().rightPanelWidth + 'px');
+    }
   }, []);
 
   // 应用主题 class 和 CSS 变量
@@ -150,73 +157,82 @@ const App: React.FC = () => {
     applyTheme(theme);
   }, [theme]);
 
-  // 拖拽调整左侧面板宽度
+  // 拖拽调整左侧面板宽度（直接操作 CSS 变量，不触发 React 重渲染）
   const handleSidebarResize = useCallback(
     (delta: number) => {
       const container = containerRef.current;
       if (!container) return;
       const containerWidth = container.offsetWidth;
+      const state = useAppStore.getState();
 
-      setSidebarWidth((prevWidth) => {
-        const { sidebarOpen, rightPanelOpen, rightPanelWidth } =
-          useAppStore.getState();
+      const cssVal = container.style.getPropertyValue('--sidebar-width');
+      const prevWidth = cssVal ? parseFloat(cssVal) : state.sidebarWidth;
 
-        // 计算中间面板当前宽度（近似）
-        let currentRightWidth = rightPanelOpen ? rightPanelWidth : 0;
-        let currentMiddle = containerWidth - prevWidth - currentRightWidth;
+      let currentRightWidth = state.rightPanelOpen ? state.rightPanelWidth : 0;
 
-        // 调整后的左侧宽度
-        let newWidth = prevWidth + delta;
+      let newWidth = prevWidth + delta;
+      if (newWidth < MIN_SIDEBAR_WIDTH) newWidth = MIN_SIDEBAR_WIDTH;
+      if (newWidth > MAX_SIDEBAR_WIDTH) newWidth = MAX_SIDEBAR_WIDTH;
 
-        // 检查是否超过左侧最大/最小限制
-        if (newWidth < MIN_SIDEBAR_WIDTH) newWidth = MIN_SIDEBAR_WIDTH;
-        if (newWidth > MAX_SIDEBAR_WIDTH) newWidth = MAX_SIDEBAR_WIDTH;
+      const newMiddle = containerWidth - newWidth - currentRightWidth;
+      if (newMiddle < MIN_CHAT_AREA_WIDTH) {
+        newWidth = containerWidth - currentRightWidth - MIN_CHAT_AREA_WIDTH;
+      }
 
-        // 检查中间区域最小宽度：中间宽度 = 总宽度 - 新左侧 - 右侧
-        const newMiddle = containerWidth - newWidth - currentRightWidth;
-        if (newMiddle < MIN_CHAT_AREA_WIDTH) {
-          // 如果中间区域过小，限制左侧继续扩大
-          newWidth = containerWidth - currentRightWidth - MIN_CHAT_AREA_WIDTH;
-        }
-
-        return Math.max(MIN_SIDEBAR_WIDTH, newWidth);
-      });
+      container.style.setProperty('--sidebar-width', Math.max(MIN_SIDEBAR_WIDTH, newWidth) + 'px');
     },
-    [setSidebarWidth],
+    [],
   );
 
-  // 拖拽调整右侧面板宽度
+  // 拖拽结束 → 提交到 Zustand
+  const handleSidebarResizeEnd = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const cssVal = container.style.getPropertyValue('--sidebar-width');
+    if (cssVal) {
+      const w = Math.max(MIN_SIDEBAR_WIDTH, parseFloat(cssVal));
+      useAppStore.getState().setSidebarWidth(Math.min(MAX_SIDEBAR_WIDTH, w));
+    }
+  }, []);
+
+  // 拖拽调整右侧面板宽度（直接操作 CSS 变量）
   const handleRightPanelResize = useCallback(
     (delta: number) => {
       const container = containerRef.current;
       if (!container) return;
       const containerWidth = container.offsetWidth;
+      const state = useAppStore.getState();
 
-      setRightPanelWidth((prevWidth) => {
-        const { sidebarOpen, sidebarWidth } = useAppStore.getState();
+      const cssVal = container.style.getPropertyValue('--right-panel-width');
+      const prevWidth = cssVal ? parseFloat(cssVal) : state.rightPanelWidth;
 
-        // 计算中间面板当前宽度
-        let currentLeftWidth = sidebarOpen ? sidebarWidth : 0;
-        let currentMiddle = containerWidth - currentLeftWidth - prevWidth;
+      let currentLeftWidth = state.sidebarOpen ? state.sidebarWidth : 0;
 
-        // 调整后的右侧宽度（注意方向：向右拖是正 delta，但右侧面板需要缩小）
-        let newWidth = prevWidth - delta;
+      // 向右拖是正 delta，右侧面板需要缩小
+      let newWidth = prevWidth - delta;
+      if (newWidth < MIN_RIGHT_PANEL_WIDTH) newWidth = MIN_RIGHT_PANEL_WIDTH;
+      if (newWidth > MAX_RIGHT_PANEL_WIDTH) newWidth = MAX_RIGHT_PANEL_WIDTH;
 
-        // 检查右侧最大/最小限制
-        if (newWidth < MIN_RIGHT_PANEL_WIDTH) newWidth = MIN_RIGHT_PANEL_WIDTH;
-        if (newWidth > MAX_RIGHT_PANEL_WIDTH) newWidth = MAX_RIGHT_PANEL_WIDTH;
+      const newMiddle = containerWidth - currentLeftWidth - newWidth;
+      if (newMiddle < MIN_CHAT_AREA_WIDTH) {
+        newWidth = containerWidth - currentLeftWidth - MIN_CHAT_AREA_WIDTH;
+      }
 
-        // 检查中间区域最小宽度
-        const newMiddle = containerWidth - currentLeftWidth - newWidth;
-        if (newMiddle < MIN_CHAT_AREA_WIDTH) {
-          newWidth = containerWidth - currentLeftWidth - MIN_CHAT_AREA_WIDTH;
-        }
-
-        return Math.max(MIN_RIGHT_PANEL_WIDTH, newWidth);
-      });
+      container.style.setProperty('--right-panel-width', Math.max(MIN_RIGHT_PANEL_WIDTH, newWidth) + 'px');
     },
-    [setRightPanelWidth],
+    [],
   );
+
+  // 拖拽结束 → 提交到 Zustand
+  const handleRightPanelResizeEnd = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const cssVal = container.style.getPropertyValue('--right-panel-width');
+    if (cssVal) {
+      const w = Math.max(MIN_RIGHT_PANEL_WIDTH, parseFloat(cssVal));
+      useAppStore.getState().setRightPanelWidth(Math.min(MAX_RIGHT_PANEL_WIDTH, w));
+    }
+  }, []);
 
   return (
     <div className="h-screen w-screen flex flex-col bg-background text-foreground overflow-hidden">
@@ -233,7 +249,7 @@ const App: React.FC = () => {
             <Sidebar />
 
             {/* 左侧拖拽手柄 */}
-            <ResizeHandle direction="vertical" onResize={handleSidebarResize} />
+            <ResizeHandle direction="vertical" onResize={handleSidebarResize} onResizeEnd={handleSidebarResizeEnd} />
 
             {/* 中间面板：对话区域 */}
             <div
@@ -246,7 +262,7 @@ const App: React.FC = () => {
             </div>
 
             {/* 右侧拖拽手柄 */}
-            <ResizeHandle direction="vertical" onResize={handleRightPanelResize} />
+            <ResizeHandle direction="vertical" onResize={handleRightPanelResize} onResizeEnd={handleRightPanelResizeEnd} />
 
             {/* 右侧面板：预览 / 轨迹 */}
             <RightPanel />

@@ -1437,15 +1437,16 @@ const ModelSettings: React.FC = () => {
   };
 
   return (
-    <div className="h-full overflow-y-auto">
-      {/* 顶部 */}
-      <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border/50">
+    <div className="h-full overflow-y-auto" style={{ 'WebkitAppRegion': 'no-drag' } as any}>
+      {/* 顶部 — 可拖拽区域 */}
+      <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border/50" style={{ 'WebkitAppRegion': 'drag' } as any}>
         <div className="px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <button
                 className="p-1.5 rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
                 onClick={() => useAppStore.getState().setShowSettings(false)}
+                style={{ 'WebkitAppRegion': 'no-drag' } as any}
               >
                 <ArrowLeft className="h-4 w-4" />
               </button>
@@ -1461,6 +1462,7 @@ const ModelSettings: React.FC = () => {
               className="h-8 text-xs"
               onClick={() => setIsAdding(true)}
               disabled={isAdding}
+              style={{ 'WebkitAppRegion': 'no-drag' } as any}
             >
               <Plus className="h-3.5 w-3.5 mr-1" />
               新增配置

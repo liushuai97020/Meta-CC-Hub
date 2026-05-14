@@ -196,7 +196,11 @@ type SidebarTab = "sessions" | "files";
 
 const Sidebar: React.FC = () => {
   const [activeTab, setActiveTab] = useState<SidebarTab>("sessions");
-  const [fileTree, setFileTree] = useState<FileSystemEntry[]>([]);
+  const [fileTree, setFileTree] = useState<FileSystemEntry[]>(
+    () => useAppStore.getState().currentProjectPath
+      ? useAppStore.getState().getFileTreeCache(useAppStore.getState().currentProjectPath!)
+      : []
+  );
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(
@@ -219,7 +223,6 @@ const Sidebar: React.FC = () => {
 
   const {
     sidebarOpen,
-    sidebarWidth,
     currentProjectPath,
     loadRecentProjects,
     openProject,
@@ -247,17 +250,31 @@ const Sidebar: React.FC = () => {
     return unsub;
   }, []);
 
-  // 当切换项目时加载文件树
+  // 当切换项目时加载文件树（优先使用缓存）
   const loadFileTree = useCallback(async (projectPath: string) => {
+    // 先检查缓存
+    const cached = useAppStore.getState().getFileTreeCache(projectPath);
+    if (cached.length > 0) {
+      setFileTree(cached);
+      return;
+    }
     try {
       const result = await window.electronAPI.fs.readDirectory(projectPath);
       if (result.success && result.data) {
         setFileTree(result.data);
+        useAppStore.getState().setFileTreeCache(projectPath, result.data);
       }
     } catch {
       setFileTree([]);
     }
   }, []);
+
+  // 当前项目路径变化时自动加载文件树（从缓存或磁盘）
+  useEffect(() => {
+    if (currentProjectPath) {
+      loadFileTree(currentProjectPath);
+    }
+  }, [currentProjectPath, loadFileTree]);
 
   // 打开新项目（弹出系统目录选择器，自动添加到项目区域并展开）
   const handleOpenNewProject = useCallback(async () => {
@@ -271,8 +288,7 @@ const Sidebar: React.FC = () => {
       next.add(path);
       return next;
     });
-    await loadFileTree(path);
-  }, [openProject, loadFileTree]);
+  }, [openProject]);
 
   // 选择文件
   const handleSelectFile = useCallback(
@@ -342,7 +358,7 @@ const Sidebar: React.FC = () => {
   return (
     <div
       className="panel flex flex-col h-full overflow-hidden mt-8"
-      style={{ width: `${sidebarWidth}px`, minWidth: "200px" }}
+      style={{ width: 'var(--sidebar-width, 280px)', minWidth: "200px" }}
     >
       {/* Tabs */}
       <div className="flex border-b border-border">
@@ -400,10 +416,17 @@ const Sidebar: React.FC = () => {
                   )
                   .slice(0, 10);
 
+                const isActiveProject = currentProjectPath === projectPath;
+
                 return (
                   <div
                     key={projectPath}
-                    className="rounded-lg border border-border overflow-hidden bg-card transition-shadow hover:shadow-sm"
+                    className={cn(
+                      "rounded-lg border overflow-hidden bg-card transition-shadow hover:shadow-sm",
+                      isActiveProject
+                        ? "border-primary/40 shadow-sm shadow-primary/10"
+                        : "border-border",
+                    )}
                   >
                     {/* 卡点头部：左侧点击切换区域 + 右侧操作按钮 */}
                     <div className="flex items-start justify-between gap-2 px-3 py-2.5">
@@ -413,12 +436,12 @@ const Sidebar: React.FC = () => {
                         onClick={() => {
                           setCurrentProjectPath(projectPath);
                           toggleProject(projectPath);
-                          loadFileTree(projectPath);
                         }}
                       >
                         <div className="flex items-center gap-2 text-sm font-medium">
-                          <FolderGit2 className="h-4 w-4 text-primary shrink-0" />
-                          <span className="truncate">{projectName}</span>
+                          <FolderGit2 className={cn("h-4 w-4 shrink-0", isActiveProject ? "text-primary" : "text-primary/70")} />
+                          <span className={cn("truncate", isActiveProject && "text-primary font-semibold")}>{projectName}</span>
+                          {isActiveProject && <span className="text-[10px] text-primary bg-primary/10 px-1.5 py-0.5 rounded-full">当前</span>}
                           <ChevronRight
                             className={cn(
                               "h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform",

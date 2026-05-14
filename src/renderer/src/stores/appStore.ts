@@ -36,6 +36,11 @@ interface AppState {
   currentProjectPath: string | null;
   setCurrentProjectPath: (path: string | null) => void;
 
+  // 文件树缓存（持久化存储，切换项目/重启时恢复）
+  fileTreeCache: Record<string, FileSystemEntry[]>;
+  setFileTreeCache: (projectPath: string, tree: FileSystemEntry[]) => void;
+  getFileTreeCache: (projectPath: string) => FileSystemEntry[];
+
   // 最近项目
   recentProjects: string[];
   loadRecentProjects: () => Promise<void>;
@@ -84,6 +89,14 @@ interface AppState {
   loadPreviewUrlHistory: () => Promise<void>;
   addPreviewUrl: (url: string) => void;
 
+  // 预览面板持久化状态（跨设置页面导航保持）
+  previewTabs: { id: string; url: string; title: string }[];
+  previewActiveTabId: string | null;
+  previewUrl: string;
+  setPreviewTabs: (tabs: { id: string; url: string; title: string }[]) => void;
+  setPreviewActiveTabId: (id: string | null) => void;
+  setPreviewUrl: (url: string) => void;
+
   // 标注任务
   annotationTasks: AnnotationTask[];
   addAnnotationTask: (task: AnnotationTask) => void;
@@ -95,7 +108,7 @@ interface AppState {
 /**
  * 创建应用状态 Store
  */
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
   // 主题 - 默认深色
   theme: "dark",
   setTheme: (theme) => {
@@ -142,6 +155,16 @@ export const useAppStore = create<AppState>((set) => ({
   // 当前项目路径
   currentProjectPath: null,
   setCurrentProjectPath: (path) => set({ currentProjectPath: path }),
+
+  // 文件树缓存
+  fileTreeCache: {},
+  setFileTreeCache: (projectPath, tree) =>
+    set((state) => ({
+      fileTreeCache: { ...state.fileTreeCache, [projectPath]: tree },
+    })),
+  getFileTreeCache: (projectPath) => {
+    return get().fileTreeCache[projectPath] || [];
+  },
 
   // 最近项目
   recentProjects: [],
@@ -235,6 +258,14 @@ export const useAppStore = create<AppState>((set) => ({
   // 当前预览 URL
   currentPreviewUrl: "",
   setCurrentPreviewUrl: (url) => set({ currentPreviewUrl: url }),
+
+  // 预览面板持久化状态（跨设置页面导航保持）
+  previewTabs: [],
+  previewActiveTabId: null,
+  previewUrl: "",
+  setPreviewTabs: (tabs) => set({ previewTabs: tabs }),
+  setPreviewActiveTabId: (id) => set({ previewActiveTabId: id }),
+  setPreviewUrl: (url) => set({ previewUrl: url }),
 
   // 预览 URL 历史
   previewUrlHistory: [],

@@ -11,6 +11,8 @@ interface ResizeHandleProps {
   direction?: 'vertical' | 'horizontal';
   /** 拖拽回调，传入鼠标移动的 deltaX/deltaY */
   onResize: (delta: number) => void;
+  /** 拖拽结束回调（mouseup），用于提交最终值 */
+  onResizeEnd?: () => void;
   /** 是否禁用 */
   disabled?: boolean;
   /** 自定义 className */
@@ -20,6 +22,7 @@ interface ResizeHandleProps {
 const ResizeHandle: React.FC<ResizeHandleProps> = ({
   direction = 'vertical',
   onResize,
+  onResizeEnd,
   disabled = false,
   className,
 }) => {
@@ -27,9 +30,11 @@ const ResizeHandle: React.FC<ResizeHandleProps> = ({
   const isDragging = useRef(false);
   const lastPos = useRef(0);
   const onResizeRef = useRef(onResize);
+  const onResizeEndRef = useRef(onResizeEnd);
 
-  // 保持 onResize 引用最新
+  // 保持 onResize/onResizeEnd 引用最新
   onResizeRef.current = onResize;
+  onResizeEndRef.current = onResizeEnd;
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -48,20 +53,32 @@ const ResizeHandle: React.FC<ResizeHandleProps> = ({
 
   // 全局事件绑定（始终绑定，通过 isDragging 判断是否生效）
   useEffect(() => {
+    let rafId: number | null = null;
+
     const handleMouseMove = (e: MouseEvent) => {
       if (!isDragging.current) return;
-      const currentPos = direction === 'vertical' ? e.clientX : e.clientY;
-      const delta = currentPos - lastPos.current;
-      lastPos.current = currentPos;
-      onResizeRef.current(delta);
+      if (rafId !== null) return; // 已有排队的帧，跳过
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        if (!isDragging.current) return;
+        const currentPos = direction === 'vertical' ? e.clientX : e.clientY;
+        const delta = currentPos - lastPos.current;
+        lastPos.current = currentPos;
+        onResizeRef.current(delta);
+      });
     };
 
     const handleMouseUp = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
       if (isDragging.current) {
         isDragging.current = false;
         setDragging(false);
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
+        onResizeEndRef.current?.();
       }
     };
 

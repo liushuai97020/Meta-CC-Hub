@@ -307,6 +307,12 @@ function setupIpcHandlers(): void {
       try {
         await view.webContents.executeJavaScript(injectDomInspectorScript());
       } catch {}
+      // 注入预览区域点击监听（用于 URL 历史弹窗关闭检测）
+      try {
+        await view.webContents.executeJavaScript(`
+          document.addEventListener('mousedown',function(){console.log('__ANN__:{\"type\":\"__previewClick\"}');});
+        `);
+      } catch {}
       // 强制通知渲染进程，触发标注模式重同步（即使标题未变化）
       mainWindow?.webContents.send("preview-tab-title-updated", {
         tabId,
@@ -1199,7 +1205,31 @@ function injectDomInspectorScript(): string {
 
       function getElementInfo(el) {
         const rect = el.getBoundingClientRect();
+
+        // 临时清除标注模式添加的样式（outline, cursor），避免污染发送给 agent 的样式数据
+        var savedOutline = el.style.outline;
+        var savedCursor = el.style.cursor;
+        if (el.__mcSavedCursor !== undefined) {
+          el.style.cursor = el.__mcSavedCursor;
+        } else {
+          el.style.cursor = '';
+        }
+        if (el.__savedOutline !== undefined) {
+          el.style.outline = el.__savedOutline;
+        } else {
+          el.style.outline = '';
+        }
+
         const styles = window.getComputedStyle(el);
+
+        // ★ 在恢复标注样式之前读取 attributes，确保 style 不带标注污染
+        var cleanAttributes = Array.from(el.attributes).map(function(a) {
+          return { name: a.name, value: a.value };
+        });
+
+        // 恢复标注样式
+        el.style.outline = savedOutline;
+        el.style.cursor = savedCursor;
         const selectors = [];
         let current = el;
         while (current && current !== document.body) {
@@ -1480,15 +1510,7 @@ function injectDomInspectorScript(): string {
             zIndex: styles.zIndex, opacity: styles.opacity, cursor: styles.cursor,
             overflow: styles.overflow, boxSizing: styles.boxSizing,
           },
-          attributes: Array.from(el.attributes).map(function(a) {
-            if (a.name === 'style') {
-              var v = a.value;
-              v = v.replace(/cursor:\s*crosshair;?\s*/gi, '');
-              v = v.replace(/outline:\s*(?:rgb\(245,\s*158,\s*11\)|#f59e0b)\s*solid\s*2px;?\s*/gi, '');
-              return { name: a.name, value: v };
-            }
-            return { name: a.name, value: a.value };
-          }),
+          attributes: cleanAttributes,
           sourceFile: sourceFile,
           sourceLine: sourceLine,
           sourceColumn: sourceColumn,
@@ -1576,6 +1598,8 @@ function injectDomInspectorScript(): string {
         if (!target) return;
         // 标注弹窗内保持默认光标，不改为 crosshair
         if (target.closest && target.closest('#__mc_popup')) return;
+        // 页面内弹框/错误遮罩不捕获
+        if (target.closest && target.closest('[role="dialog"], [role="alertdialog"], [role="alert"]')) return;
 
         // 已标注元素不变色（已有 outline），但仍显示标签
         if (highlights.has(target)) {
@@ -1673,6 +1697,9 @@ function injectDomInspectorScript(): string {
         if (e.target.closest && e.target.closest('#__mc_popup')) return;
         // 已标注元素的原生交互不受影响
         if (highlights.has(findHoverTarget(e.target))) return;
+
+        // 不拦截页面内的弹框/错误遮罩（React error overlay 等），让用户能关掉
+        if (e.target.closest && e.target.closest('[role="dialog"], [role="alertdialog"], [role="alert"]')) return;
 
         e.preventDefault();
         e.stopPropagation();
