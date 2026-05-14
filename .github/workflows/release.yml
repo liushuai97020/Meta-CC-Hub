@@ -56,11 +56,31 @@ jobs:
     needs: build
     runs-on: ubuntu-22
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
 
-      - name: Display structure
-        run: ls -R
+      - name: Extract release notes from CHANGELOG.md
+        id: changelog
+        shell: bash
+        run: |
+          # 从 CHANGELOG.md 中提取当前版本对应的更新内容
+          TAG=${GITHUB_REF_NAME}
+          VERSION=${TAG#v}
+          echo "Extracting notes for version: $VERSION"
+          # 提取两个 ## [版本号] 之间的内容
+          NOTES=$(awk "/^## \\[$VERSION\\]/,/^## \\[/{ if (!/^## \\[/ || /^## \\[$VERSION\\]/) print }" CHANGELOG.md | tail -n +2 | sed '$d')
+          if [ -z "$NOTES" ]; then
+            echo "No CHANGELOG entry found for version $VERSION, will use auto-generated notes"
+            echo "has_notes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "notes<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$NOTES" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            echo "has_notes=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -69,4 +89,5 @@ jobs:
             windows-installer/*.exe
             macos-installer/*.dmg
             macos-installer/*.zip
-          generate_release_notes: true
+          body: ${{ steps.changelog.outputs.has_notes == 'true' && steps.changelog.outputs.notes || '' }}
+          generate_release_notes: ${{ steps.changelog.outputs.has_notes != 'true' }}

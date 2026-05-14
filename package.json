@@ -17,7 +17,7 @@
     "dist:win": "electron-builder --win"
   },
   "build": {
-    "appId": "com.techcchub.app",
+    "appId": "com.metacode.app",
     "productName": "MetaCode ",
     "directories": {
       "output": "release"
