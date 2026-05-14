@@ -1,4 +1,4 @@
-name: Build and Release
+name: Build macOS
 
 on:
   push:
@@ -12,12 +12,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        os: [windows-2022, macos-13]
-    runs-on: ${{ matrix.os }}
-
+  build-macos:
+    runs-on: macos-13
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,61 +30,13 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Package
-        run: npx electron-builder --${{ matrix.os == 'windows-2022' && 'win' || 'mac' }}
+      - name: Package (macOS)
+        run: npx electron-builder --mac
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 使用镜像加速 winCodeSign 等工具下载
-          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
 
-      - name: Upload Artifacts (Windows)
-        if: matrix.os == 'windows-2022'
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-installer
-          path: release/*.exe
-          if-no-files-found: warn
-
-      - name: Upload Artifacts (macOS)
-        if: matrix.os == 'macos-13'
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-installer
-          path: release/*.{dmg,zip}
-          if-no-files-found: warn
-
-  release:
-    needs: build
-    runs-on: ubuntu-22
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-
-      - name: Extract release notes from CHANGELOG.md
-        id: changelog
-        shell: bash
+      - name: Upload to Release
         run: |
-          TAG=${GITHUB_REF_NAME}
-          VERSION=${TAG#v}
-          NOTES=$(awk "/^## \\[$VERSION\\]/,/^## \\[/{ if (!/^## \\[/ || /^## \\[$VERSION\\]/) print }" CHANGELOG.md | tail -n +2 | sed '$d')
-          if [ -z "$NOTES" ]; then
-            echo "has_notes=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "notes<<EOF" >> "$GITHUB_OUTPUT"
-            echo "$NOTES" >> "$GITHUB_OUTPUT"
-            echo "EOF" >> "$GITHUB_OUTPUT"
-            echo "has_notes=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            windows-installer/*.exe
-            macos-installer/*.dmg
-            macos-installer/*.zip
-          body: ${{ steps.changelog.outputs.has_notes == 'true' && steps.changelog.outputs.notes || '' }}
-          generate_release_notes: ${{ steps.changelog.outputs.has_notes != 'true' }}
+          gh release upload ${{ github.ref_name }} release/*.dmg release/*.zip --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
