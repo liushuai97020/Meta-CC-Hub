@@ -38,9 +38,22 @@ import {
   Puzzle,
   Plug,
   Sliders,
+  Wrench,
+  Bot,
+  Sun,
+  Moon,
+  Type,
+  Database,
+  Info,
+  Power,
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import AgentToolCenter from "./agent/AgentToolCenter";
+import AgentSkillCenter from "./agent/AgentSkillCenter";
+import AgentPluginMarket from "./agent/AgentPluginMarket";
+import AgentSettingsPage from "./agent/AgentSettingsPage";
+import MemorySettingsPanel from "./agent/MemorySettingsPanel";
 import {
   ResponsiveContainer,
   AreaChart,
@@ -1654,21 +1667,453 @@ const UsageStatsPanel: React.FC = () => {
 };
 
 // ========================
-// 占位 Tab 组件
+// 高级设置 - 外观设置
 // ========================
 
-const PlaceholderTab: React.FC<{ icon: React.FC<{ className?: string }>; title: string; desc: string }> = ({ icon: Icon, title, desc }) => (
-  <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-6">
-    <div className="w-24 h-24 rounded-3xl bg-gradient-to-br from-muted/80 to-muted/30 flex items-center justify-center mb-6 shadow-sm border border-border/30">
-      <Icon className="h-10 w-10 text-muted-foreground/25" />
+const AppearanceSection: React.FC = () => {
+  const { theme, toggleTheme, fontSize, setFontSize } = useAppStore();
+
+  const FONT_SIZES = [
+    { value: 12, label: "小" },
+    { value: 14, label: "中" },
+    { value: 16, label: "大" },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <h3 className="text-sm font-semibold flex items-center gap-2">
+        <Settings className="h-4 w-4 text-muted-foreground" />
+        外观设置
+      </h3>
+
+      {/* 主题模式 */}
+      <div className="rounded-xl border border-border/40 bg-card/40 p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={cn(
+              "w-9 h-9 rounded-lg flex items-center justify-center",
+              theme === "dark" ? "bg-indigo-500/10 text-indigo-400" : "bg-amber-500/10 text-amber-500",
+            )}>
+              {theme === "dark" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
+            </div>
+            <div>
+              <p className="text-sm font-medium">主题模式</p>
+              <p className="text-[11px] text-muted-foreground">
+                {theme === "dark" ? "深色模式" : "浅色模式"}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={toggleTheme}
+            className={cn(
+              "relative h-7 w-14 rounded-full transition-colors duration-300",
+              theme === "dark"
+                ? "bg-indigo-500/20 border border-indigo-500/30"
+                : "bg-amber-100 border border-amber-300",
+            )}
+          >
+            <span
+              className={cn(
+                "absolute top-1 h-5 w-5 rounded-full bg-white shadow-md transition-all duration-300 flex items-center justify-center",
+                theme === "dark" ? "left-1 bg-indigo-500" : "left-8 bg-amber-500",
+              )}
+            >
+              {theme === "dark"
+                ? <Moon className="h-3 w-3 text-white" />
+                : <Sun className="h-3 w-3 text-white" />
+              }
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {/* 字体大小 */}
+      <div className="rounded-xl border border-border/40 bg-card/40 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center text-blue-400">
+              <Type className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">字体大小</p>
+              <p className="text-[11px] text-muted-foreground">当前 {fontSize}px</p>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {FONT_SIZES.map((item) => (
+            <button
+              key={item.value}
+              onClick={() => setFontSize(item.value)}
+              className={cn(
+                "flex-1 py-2 rounded-lg text-xs font-medium transition-all border",
+                fontSize === item.value
+                  ? "bg-primary/10 border-primary/30 text-primary"
+                  : "bg-muted/30 border-border/30 text-muted-foreground hover:bg-muted/50",
+              )}
+            >
+              <span style={{ fontSize: `${item.value}px` }}>{item.label}</span>
+              <span className="block text-[10px] opacity-60">{item.value}px</span>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
-    <h2 className="text-xl font-semibold text-foreground/70 mb-2">{title}</h2>
-    <p className="text-sm text-muted-foreground/50 max-w-md leading-relaxed">{desc}</p>
-    <div className="mt-10 px-5 py-2 rounded-full bg-muted/40 border border-border/30">
-      <span className="text-[11px] text-muted-foreground/40 font-medium tracking-wider">即将推出</span>
+  );
+};
+
+// ========================
+// 高级设置 - 代理设置
+// ========================
+
+const PROXY_PROTOCOLS = [
+  { value: "http", label: "HTTP" },
+  { value: "https", label: "HTTPS" },
+  { value: "socks5", label: "SOCKS5" },
+] as const;
+
+const ProxySection: React.FC = () => {
+  const { globalProxy, setGlobalProxy } = useAppStore();
+  const [enabled, setEnabled] = useState(!!globalProxy);
+  const [protocol, setProtocol] = useState<ProxyConfig["protocol"]>(globalProxy?.protocol || "http");
+  const [host, setHost] = useState(globalProxy?.host || "");
+  const [port, setPort] = useState(globalProxy?.port ? String(globalProxy.port) : "");
+  const [username, setUsername] = useState(globalProxy?.username || "");
+  const [password, setPassword] = useState(globalProxy?.password || "");
+  const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const handleSave = () => {
+    if (!enabled) {
+      setGlobalProxy(null);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+      return;
+    }
+    if (!host.trim() || !port.trim()) return;
+
+    const proxy: ProxyConfig = {
+      protocol,
+      host: host.trim(),
+      port: Number(port),
+      ...(username.trim() ? { username: username.trim(), password } : {}),
+    };
+    setGlobalProxy(proxy);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const hasChanges = (() => {
+    if (!enabled && !globalProxy) return false;
+    if (!enabled && globalProxy) return true;
+    if (enabled && !globalProxy) return true;
+    if (!globalProxy) return false;
+    return (
+      globalProxy.protocol !== protocol ||
+      globalProxy.host !== host.trim() ||
+      globalProxy.port !== Number(port) ||
+      (globalProxy.username || "") !== username.trim() ||
+      (globalProxy.password || "") !== password
+    );
+  })();
+
+  return (
+    <div className="space-y-4">
+      <h3 className="text-sm font-semibold flex items-center gap-2">
+        <Globe className="h-4 w-4 text-muted-foreground" />
+        代理设置
+      </h3>
+
+      <div className="rounded-xl border border-border/40 bg-card/40 p-4 space-y-4">
+        {/* 启用开关 */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={cn(
+              "w-9 h-9 rounded-lg flex items-center justify-center",
+              enabled ? "bg-emerald-500/10 text-emerald-400" : "bg-muted/40 text-muted-foreground/40",
+            )}>
+              <Network className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">全局代理</p>
+              <p className="text-[11px] text-muted-foreground">
+                {enabled ? "已启用" : "已禁用"}
+              </p>
+            </div>
+          </div>
+          <Toggle checked={enabled} onChange={() => setEnabled(!enabled)} />
+        </div>
+
+        {/* 代理配置表单 */}
+        {enabled && (
+          <div className="space-y-3 pt-2 border-t border-border/30">
+            {/* 协议选择 */}
+            <div>
+              <label className="text-[11px] text-muted-foreground mb-1.5 block">协议类型</label>
+              <div className="flex gap-1.5">
+                {PROXY_PROTOCOLS.map((p) => (
+                  <button
+                    key={p.value}
+                    onClick={() => setProtocol(p.value)}
+                    className={cn(
+                      "flex-1 py-1.5 rounded-md text-xs font-medium transition-all border",
+                      protocol === p.value
+                        ? "bg-primary/10 border-primary/30 text-primary"
+                        : "bg-muted/30 border-border/30 text-muted-foreground hover:bg-muted/50",
+                    )}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 主机和端口 */}
+            <div className="grid grid-cols-3 gap-2">
+              <div className="col-span-2">
+                <label className="text-[11px] text-muted-foreground mb-1.5 block">主机地址</label>
+                <input
+                  className="w-full h-8 rounded-md border border-input bg-background px-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary/30"
+                  placeholder="127.0.0.1"
+                  value={host}
+                  onChange={(e) => setHost(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] text-muted-foreground mb-1.5 block">端口</label>
+                <input
+                  className="w-full h-8 rounded-md border border-input bg-background px-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary/30"
+                  placeholder="7890"
+                  value={port}
+                  onChange={(e) => setPort(e.target.value.replace(/\D/g, ""))}
+                />
+              </div>
+            </div>
+
+            {/* 认证信息 */}
+            <details className="group">
+              <summary className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground transition-colors select-none">
+                认证信息（可选）
+              </summary>
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                <div>
+                  <label className="text-[11px] text-muted-foreground mb-1.5 block">用户名</label>
+                  <input
+                    className="w-full h-8 rounded-md border border-input bg-background px-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary/30"
+                    placeholder="用户名"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] text-muted-foreground mb-1.5 block">密码</label>
+                  <input
+                    type="password"
+                    className="w-full h-8 rounded-md border border-input bg-background px-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary/30"
+                    placeholder="密码"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                  />
+                </div>
+              </div>
+            </details>
+
+            {/* 保存按钮 */}
+            <button
+              onClick={handleSave}
+              disabled={!hasChanges}
+              className={cn(
+                "w-full py-2 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5",
+                hasChanges
+                  ? "bg-primary text-primary-foreground hover:opacity-90"
+                  : "bg-muted/30 text-muted-foreground/40 cursor-not-allowed",
+              )}
+            >
+              {saved ? (
+                <>
+                  <Check className="h-3.5 w-3.5 text-emerald-500" />
+                  已保存
+                </>
+              ) : (
+                "保存代理配置"
+              )}
+            </button>
+
+            {/* 测试代理按钮 */}
+            <button
+              onClick={async () => {
+                if (!host.trim() || !port.trim()) return;
+                const proxy: ProxyConfig = {
+                  protocol,
+                  host: host.trim(),
+                  port: Number(port),
+                  ...(username.trim() ? { username: username.trim(), password } : {}),
+                };
+                setTesting(true);
+                setTestResult(null);
+                try {
+                  const res = await window.electronAPI?.app.testProxy(proxy);
+                  if (res?.success) {
+                    setTestResult({ ok: true, msg: `连接成功 · ${res.latency}ms · 出口IP: ${res.ip || "—"}` });
+                  } else {
+                    setTestResult({ ok: false, msg: `${res?.error || "连接失败"}` });
+                  }
+                } catch (err: any) {
+                  setTestResult({ ok: false, msg: `测试异常: ${err.message || err}` });
+                }
+                setTesting(false);
+              }}
+              disabled={testing || !host.trim() || !port.trim()}
+              className={cn(
+                "w-full py-2 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5 border",
+                testResult?.ok
+                  ? "bg-emerald-500/5 border-emerald-500/30 text-emerald-500"
+                  : testResult && !testResult.ok
+                    ? "bg-red-500/5 border-red-500/20 text-red-500"
+                    : "bg-muted/20 border-border/30 text-muted-foreground hover:bg-muted/40",
+              )}
+            >
+              {testing ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  测试中...
+                </>
+              ) : testResult ? (
+                <>
+                  {testResult.ok
+                    ? <Check className="h-3.5 w-3.5" />
+                    : <X className="h-3.5 w-3.5" />}
+                  {testResult.msg}
+                </>
+              ) : (
+                <>
+                  <Wifi className="h-3.5 w-3.5" />
+                  测试代理连接
+                </>
+              )}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
-  </div>
-);
+  );
+};
+
+// ========================
+// 高级设置 - 应用配置
+// ========================
+
+const AppConfigSection: React.FC = () => {
+  const { autoLaunch, setAutoLaunch } = useAppStore();
+  const [dataPath, setDataPath] = useState("");
+  const [appVersion, setAppVersion] = useState("");
+  const [cacheCleared, setCacheCleared] = useState(false);
+  const [clearing, setClearing] = useState(false);
+
+  useEffect(() => {
+    window.electronAPI?.app.getDataPath().then(setDataPath).catch(() => {});
+    window.electronAPI?.app.getVersion().then(setAppVersion).catch(() => {});
+  }, []);
+
+  const handleClearCache = async () => {
+    if (!window.confirm("确定要清除所有用量统计和缓存数据？此操作不可撤销。")) return;
+    setClearing(true);
+    try {
+      await window.electronAPI?.app.clearCache();
+      setCacheCleared(true);
+      setTimeout(() => setCacheCleared(false), 3000);
+    } catch { /* ignore */ }
+    setClearing(false);
+  };
+
+  return (
+    <div className="space-y-4">
+      <h3 className="text-sm font-semibold flex items-center gap-2">
+        <Sliders className="h-4 w-4 text-muted-foreground" />
+        应用配置
+      </h3>
+
+      {/* 开机自启 */}
+      <div className="rounded-xl border border-border/40 bg-card/40 p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={cn(
+              "w-9 h-9 rounded-lg flex items-center justify-center",
+              autoLaunch ? "bg-emerald-500/10 text-emerald-400" : "bg-muted/40 text-muted-foreground/40",
+            )}>
+              <Power className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-sm font-medium">开机自启</p>
+              <p className="text-[11px] text-muted-foreground">
+                {autoLaunch ? "系统启动时自动运行" : "手动启动应用"}
+              </p>
+            </div>
+          </div>
+          <Toggle checked={autoLaunch} onChange={() => setAutoLaunch(!autoLaunch)} />
+        </div>
+      </div>
+
+      {/* 数据管理 */}
+      <div className="rounded-xl border border-border/40 bg-card/40 p-4 space-y-3">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg bg-orange-500/10 flex items-center justify-center text-orange-400">
+            <Database className="h-4 w-4" />
+          </div>
+          <div>
+            <p className="text-sm font-medium">数据管理</p>
+            <p className="text-[11px] text-muted-foreground">
+              {dataPath ? dataPath : "加载中..."}
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={handleClearCache}
+          disabled={clearing}
+          className={cn(
+            "w-full py-2 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5 border",
+            cacheCleared
+              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-500"
+              : "bg-red-500/5 border-red-500/20 text-red-500 hover:bg-red-500/10",
+          )}
+        >
+          {clearing ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              清除中...
+            </>
+          ) : cacheCleared ? (
+            <>
+              <Check className="h-3.5 w-3.5" />
+              已清除
+            </>
+          ) : (
+            <>
+              <Trash2 className="h-3.5 w-3.5" />
+              清除用量统计与缓存
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* 关于 */}
+      <div className="rounded-xl border border-border/40 bg-card/40 p-4">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg bg-violet-500/10 flex items-center justify-center text-violet-400">
+            <Info className="h-4 w-4" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium">关于 MetaCode</p>
+            <p className="text-[11px] text-muted-foreground">
+              版本 {appVersion || "—"} · AI 代码助手 · 多模型聚合 · Agent 智能体
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // ========================
 // 设置页面 Tab 定义
@@ -1684,8 +2129,11 @@ interface SettingsTab {
 const SETTINGS_TABS: SettingsTab[] = [
   { id: "gateway", label: "网关配置", icon: Network, desc: "管理 AI 网关连接与模型分配" },
   { id: "usage", label: "用量统计", icon: BarChart3, desc: "查看 Token 与请求消耗" },
-  { id: "skills", label: "技能管理", icon: Puzzle, desc: "管理自定义技能与提示词" },
-  { id: "plugins", label: "插件系统", icon: Plug, desc: "扩展应用功能" },
+  { id: "memory", label: "记忆与上下文", icon: Brain, desc: "RAG 向量记忆与上下文管理" },
+  { id: "tools", label: "工具中心", icon: Wrench, desc: "管理工具、查看调用日志" },
+  { id: "skills", label: "技能中心", icon: Puzzle, desc: "预设技能与工作流" },
+  { id: "plugins", label: "插件系统", icon: Plug, desc: "管理插件、权限管控" },
+  { id: "agent", label: "Agent 设置", icon: Bot, desc: "智能代理与安全配置" },
   { id: "advanced", label: "高级设置", icon: Sliders, desc: "代理、主题与应用配置" },
 ];
 
@@ -1706,7 +2154,16 @@ const ModelSettings: React.FC = () => {
     testConnection,
     pullModels,
   } = useGatewayStore();
-  const [activeSettingsTab, setActiveSettingsTab] = useState("gateway");
+  const { settingsInitialTab } = useAppStore();
+  const [activeSettingsTab, setActiveSettingsTab] = useState(settingsInitialTab || "gateway");
+  const [appVersion, setAppVersion] = useState("");
+
+  // 当 settingsInitialTab 变化时同步（从侧边栏导航进来）
+  useEffect(() => {
+    if (settingsInitialTab) {
+      setActiveSettingsTab(settingsInitialTab);
+    }
+  }, [settingsInitialTab]);
   const [isAdding, setIsAdding] = useState(false);
   const [pullingMap, setPullingMap] = useState<Record<string, boolean>>({});
   const [testingMap, setTestingMap] = useState<Record<string, boolean>>({});
@@ -1714,6 +2171,10 @@ const ModelSettings: React.FC = () => {
   useEffect(() => {
     loadProfiles();
   }, [loadProfiles]);
+
+  useEffect(() => {
+    window.electronAPI?.app.getVersion().then(setAppVersion).catch(() => {});
+  }, []);
 
   const activeProfile = profiles.find((p) => p.id === activeProfileId);
 
@@ -1762,7 +2223,7 @@ const ModelSettings: React.FC = () => {
             </div>
             <div>
               <h2 className="text-sm font-semibold">设置</h2>
-              <p className="text-[10px] text-muted-foreground/50">MetaCode v1.0.3</p>
+              <p className="text-[10px] text-muted-foreground/50">MetaCode {appVersion ? `v${appVersion}` : ""}</p>
             </div>
           </div>
           <button
@@ -1893,13 +2354,96 @@ const ModelSettings: React.FC = () => {
           </>
         )}
 
-        {/* ===== 后续功能的占位 Tab ===== */}
-        {(activeSettingsTab === "skills" || activeSettingsTab === "plugins" || activeSettingsTab === "advanced") && (
-          <PlaceholderTab
-            icon={SETTINGS_TABS.find(t => t.id === activeSettingsTab)!.icon}
-            title={SETTINGS_TABS.find(t => t.id === activeSettingsTab)!.label}
-            desc={SETTINGS_TABS.find(t => t.id === activeSettingsTab)!.desc}
-          />
+        {/* ===== 记忆与上下文 Tab ===== */}
+        {activeSettingsTab === "memory" && (
+          <>
+            <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border/50" style={{ 'WebkitAppRegion': 'drag' } as any}>
+              <div className="px-6 py-4">
+                <h1 className="text-lg font-semibold">记忆与上下文</h1>
+                <p className="text-sm text-muted-foreground mt-0.5">RAG 向量记忆、省 Token 策略与上下文管理</p>
+              </div>
+            </div>
+            <div className="p-6">
+              <MemorySettingsPanel />
+            </div>
+          </>
+        )}
+
+        {/* ===== 工具中心 Tab ===== */}
+        {activeSettingsTab === "tools" && (
+          <>
+            <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border/50" style={{ 'WebkitAppRegion': 'drag' } as any}>
+              <div className="px-6 py-4">
+                <h1 className="text-lg font-semibold">工具中心</h1>
+                <p className="text-sm text-muted-foreground mt-0.5">查看所有已注册工具、开关权限、查看调用日志</p>
+              </div>
+            </div>
+            <div className="p-6">
+              <AgentToolCenter />
+            </div>
+          </>
+        )}
+
+        {/* ===== 技能中心 Tab ===== */}
+        {activeSettingsTab === "skills" && (
+          <>
+            <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border/50" style={{ 'WebkitAppRegion': 'drag' } as any}>
+              <div className="px-6 py-4">
+                <h1 className="text-lg font-semibold">技能中心</h1>
+                <p className="text-sm text-muted-foreground mt-0.5">预设技能工作流、自定义编排</p>
+              </div>
+            </div>
+            <div className="p-6">
+              <AgentSkillCenter />
+            </div>
+          </>
+        )}
+
+        {/* ===== 插件系统 Tab ===== */}
+        {activeSettingsTab === "plugins" && (
+          <>
+            <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border/50" style={{ 'WebkitAppRegion': 'drag' } as any}>
+              <div className="px-6 py-4">
+                <h1 className="text-lg font-semibold">插件系统</h1>
+                <p className="text-sm text-muted-foreground mt-0.5">管理插件、查看权限、启停控制</p>
+              </div>
+            </div>
+            <div className="p-6">
+              <AgentPluginMarket />
+            </div>
+          </>
+        )}
+
+        {/* ===== Agent 设置 Tab ===== */}
+        {activeSettingsTab === "agent" && (
+          <>
+            <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border/50" style={{ 'WebkitAppRegion': 'drag' } as any}>
+              <div className="px-6 py-4">
+                <h1 className="text-lg font-semibold">Agent 设置</h1>
+                <p className="text-sm text-muted-foreground mt-0.5">智能代理配置与权限管控</p>
+              </div>
+            </div>
+            <div className="p-6">
+              <AgentSettingsPage />
+            </div>
+          </>
+        )}
+
+        {/* ===== 高级设置 Tab ===== */}
+        {activeSettingsTab === "advanced" && (
+          <>
+            <div className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border/50" style={{ 'WebkitAppRegion': 'drag' } as any}>
+              <div className="px-6 py-4">
+                <h1 className="text-lg font-semibold">高级设置</h1>
+                <p className="text-sm text-muted-foreground mt-0.5">代理、主题与应用配置</p>
+              </div>
+            </div>
+            <div className="p-6 max-w-2xl space-y-8">
+              <AppearanceSection />
+              <ProxySection />
+              <AppConfigSection />
+            </div>
+          </>
         )}
 
       </div>

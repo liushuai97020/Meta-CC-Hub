@@ -5,6 +5,7 @@
 import { app, BrowserWindow, ipcMain, BrowserView, dialog } from "electron";
 import path from "path";
 import fs from "fs";
+import type { AgentConfig } from "../agent/types";
 
 // ========================
 // 全局变量
@@ -60,8 +61,31 @@ async function initStore(): Promise<void> {
       theme: "dark",
       windowBounds: { width: 1400, height: 900 },
       usageStats: { totalTokens: 0, totalRequests: 0, dailyStats: [], gatewayStats: {} },
+      agentConfig: null as AgentConfig | null,
+      memoryConfig: null as Record<string, unknown> | null,
+      pluginStates: {} as Record<string, string>,
+      globalProxy: null as ProxyConfig | null,
+      appConfig: { fontSize: 14, autoLaunch: false } as { fontSize: number; autoLaunch: boolean },
     },
   });
+}
+
+/**
+ * 解析有效的代理配置（网关/模型代理优先，回退全局代理）
+ */
+function resolveProxy(profileOrModelProxy?: ProxyConfig): ProxyConfig | null {
+  if (profileOrModelProxy) return profileOrModelProxy;
+  return store?.get("globalProxy") || null;
+}
+
+/** 将 ProxyConfig 转为 fetch 的 proxy 选项 */
+function buildProxyOption(proxy: ProxyConfig) {
+  return {
+    protocol: proxy.protocol,
+    host: proxy.host,
+    port: proxy.port,
+    ...(proxy.username ? { auth: `${proxy.username}:${proxy.password || ""}` } : {}),
+  };
 }
 
 /**
@@ -299,7 +323,7 @@ function setupIpcHandlers(): void {
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: true,
+        sandbox: false,
       },
     });
 
@@ -576,15 +600,9 @@ function setupIpcHandlers(): void {
 
         // 支持代理
         const fetchOptions: RequestInit = { method: "GET", headers };
-        if (modelConfig.proxy) {
-          (fetchOptions as any).proxy = {
-            protocol: modelConfig.proxy.protocol,
-            host: modelConfig.proxy.host,
-            port: modelConfig.proxy.port,
-            ...(modelConfig.proxy.username && {
-              auth: `${modelConfig.proxy.username}:${modelConfig.proxy.password || ""}`,
-            }),
-          };
+        const effectiveProxy = resolveProxy(modelConfig.proxy);
+        if (effectiveProxy) {
+          (fetchOptions as any).proxy = buildProxyOption(effectiveProxy);
         }
 
         // 使用 fetch 测试连接，设置 10 秒超时
@@ -659,7 +677,7 @@ function setupIpcHandlers(): void {
       baseUrl: profile.baseUrl,
       apiKey: profile.apiKey,
       modelName: profile.defaultModel,
-      proxy: profile.proxy,
+      proxy: resolveProxy(profile.proxy) || undefined,
       provider: profile.provider,
       apiFormat: profile.apiFormat || (
         (profile.type === "third-party" && profile.provider !== "deepseek")
@@ -788,12 +806,9 @@ function setupIpcHandlers(): void {
         }
 
         const fetchOptions: RequestInit = { method: "GET", headers };
-        if (profile.proxy) {
-          (fetchOptions as any).proxy = {
-            protocol: profile.proxy.protocol,
-            host: profile.proxy.host,
-            port: profile.proxy.port,
-          };
+        const effectiveProxy = resolveProxy(profile.proxy);
+        if (effectiveProxy) {
+          (fetchOptions as any).proxy = buildProxyOption(effectiveProxy);
         }
 
         const controller = new AbortController();
@@ -848,12 +863,9 @@ function setupIpcHandlers(): void {
         }
 
         const fetchOptions: RequestInit = { method: "GET", headers };
-        if (profile.proxy) {
-          (fetchOptions as any).proxy = {
-            protocol: profile.proxy.protocol,
-            host: profile.proxy.host,
-            port: profile.proxy.port,
-          };
+        const effectiveProxy = resolveProxy(profile.proxy);
+        if (effectiveProxy) {
+          (fetchOptions as any).proxy = buildProxyOption(effectiveProxy);
         }
 
         const controller = new AbortController();
@@ -976,6 +988,21 @@ function setupIpcHandlers(): void {
       }
 
       store.set("usageStats", current);
+
+      // 同步写入记忆系统的用量日志
+      try {
+        const { getAgentSystem } = require("./agent-ipc.js");
+        const sys = getAgentSystem();
+        if (sys?.memoryManager?.isInitialized()) {
+          sys.memoryManager.logUsage(
+            data.gatewayId,
+            data.gatewayName,
+            data.tokens,
+            data.requests,
+          );
+        }
+      } catch { /* 记忆系统不可用时静默降级 */ }
+
       return { success: true };
     },
   );
@@ -1131,7 +1158,46 @@ function setupIpcHandlers(): void {
         return { success: false, error: "Agent not initialized" };
       }
       try {
-        const fullMessage = params.message;
+        let fullMessage = params.message;
+        let augmentedHistory = params.history;
+
+        // 标签上下文解析：将 [skill:xxx]、[mcp:xxx] 等标签解析为实际指令
+        try {
+          const { resolveTagContext } = await import("./agent-ipc.js");
+          fullMessage = await resolveTagContext(fullMessage);
+        } catch {
+          // 标签解析失败时静默降级
+        }
+
+        // RAG 增强：如果记忆系统就绪且开启，检索相关记忆增强上下文
+        try {
+          const { getAgentSystem } = await import("./agent-ipc.js");
+          const sys = getAgentSystem();
+          if (sys?.memoryManager?.isInitialized()) {
+            const memConfig = sys.memoryManager.getConfig();
+            if (memConfig.enabled) {
+              const activeSessionId = store.get("activeSessionId") as string | null;
+              const { memories, tokenEstimate } = await sys.memoryManager.retrieveMemories(
+                fullMessage,
+                activeSessionId || undefined,
+              );
+              if (memories.length > 0 && tokenEstimate > 0) {
+                const memContext = memories.map((m: any) =>
+                  `[${new Date(m.timestamp).toLocaleString("zh-CN")}] ${m.summary || m.content?.slice(0, 200)}`
+                ).join("\n");
+                const ragSystemMsg = {
+                  role: "user" as const,
+                  content: `【历史相关记忆（向量检索）】\n以下是与当前问题相关的历史对话记忆：\n${memContext}\n\n请参考以上历史记忆回答当前问题。`,
+                };
+                augmentedHistory = [...(params.history || []), ragSystemMsg];
+                console.log(`[RAG] 检索到 ${memories.length} 条相关记忆，约 ${tokenEstimate} tokens`);
+              }
+            }
+          }
+        } catch {
+          // RAG 不可用时静默降级
+        }
+
         // 120s 超时保护，防止 API 挂起导致 UI 卡死
         const TIMEOUT_MS = 120_000;
         const response = await Promise.race([
@@ -1145,6 +1211,7 @@ function setupIpcHandlers(): void {
                 mainWindow?.webContents.send("agent:chunk", text);
               },
               onToolUse: (toolName: string, input: Record<string, unknown>) => {
+                console.log(`[Agent] onToolUse: ${toolName}`, JSON.stringify(input));
                 mainWindow?.webContents.send("agent:tool-use", {
                   toolName,
                   input,
@@ -1164,12 +1231,44 @@ function setupIpcHandlers(): void {
               },
             },
             params.cwd,
-            params.history,
+            augmentedHistory,
           ),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error("API 请求超时 (120s)")), TIMEOUT_MS)
           ),
         ]);
+
+        // 对话完成后，异步向量化存储到记忆系统
+        try {
+          const { getAgentSystem } = require("./agent-ipc.js");
+          const sys = getAgentSystem();
+          if (sys?.memoryManager?.isInitialized() && sys.memoryManager.getConfig().enabled) {
+            // 从 electron-store 获取当前活跃会话的消息进行向量化
+            const sessions = store.get("sessions") as SessionData[];
+            const activeId = store.get("activeSessionId") as string | null;
+            const activeSession = sessions.find((s: SessionData) => s.id === activeId);
+            if (activeSession?.messages?.length) {
+              const memMessages = activeSession.messages.map((m: ChatMessage) => ({
+                id: m.id,
+                sessionId: activeSession.id,
+                role: m.role,
+                content: m.content,
+                timestamp: m.timestamp,
+              }));
+              // 确保会话存在于记忆系统
+              sys.memoryManager.createSession(activeSession.id, activeSession.title);
+              // 存储消息
+              for (const msg of memMessages) {
+                sys.memoryManager.addMessage(msg);
+              }
+              // 异步向量化
+              sys.memoryManager.memorizeSessionMessages(activeSession.id, memMessages)
+                .then(() => console.log("[RAG] 会话已向量化存储"))
+                .catch((err: any) => console.error("[RAG] 向量化失败:", err));
+            }
+          }
+        } catch { /* 静默 */ }
+
         return { success: true, data: response };
       } catch (error) {
         mainWindow?.webContents.send("agent:error", String(error));
@@ -1191,6 +1290,39 @@ function setupIpcHandlers(): void {
           await claudeAgentInstance.initialize(activeModel);
         }
       }
+
+      // 将可用技能列表注入 agent system prompt，让 agent 感知技能
+      try {
+        const { buildAvailableSkillsMd, setOnSkillsChanged, getAgentSystem } = await import("./agent-ipc.js");
+        if (claudeAgentInstance) {
+          claudeAgentInstance.setAvailableSkillsMd(buildAvailableSkillsMd());
+          // 注入 MCP 客户端（使 agent 可调用 MCP 工具）
+          const agentSys = getAgentSystem();
+          if (agentSys) {
+            claudeAgentInstance.setMCPClient(agentSys.mcpClient);
+            // 模型切换后更新 Embedding 提供者（用记忆系统独立配置）
+            if (agentSys.memoryManager.isInitialized()) {
+              const savedMemCfg = store.get("memoryConfig") || {};
+              const embBaseUrl = savedMemCfg.embeddingBaseUrl || "https://api.openai.com/v1";
+              const embModel = savedMemCfg.embeddingModel || "text-embedding-3-small";
+              let embApiKey = savedMemCfg.embeddingApiKey || "";
+              if (!embApiKey && activeModel?.apiKey) embApiKey = activeModel.apiKey;
+              agentSys.memoryManager.configureEmbedding({
+                baseUrl: embBaseUrl,
+                apiKey: embApiKey || undefined,
+                model: embModel,
+              });
+            }
+          }
+          // 注册技能变更回调，自动更新 system prompt
+          setOnSkillsChanged(() => {
+            if (claudeAgentInstance) {
+              claudeAgentInstance.setAvailableSkillsMd(buildAvailableSkillsMd());
+            }
+          });
+        }
+      } catch { /* agent 系统未就绪时静默忽略 */ }
+
       return { success: true };
     } catch (error) {
       return { success: false, error: String(error) };
@@ -1221,6 +1353,71 @@ function setupIpcHandlers(): void {
   // ==========================================
   ipcMain.handle("app:getConfig", () => {
     return store.store;
+  });
+
+  ipcMain.handle("app:getAppConfig", () => {
+    return store.get("appConfig") || { fontSize: 14, autoLaunch: false };
+  });
+
+  ipcMain.handle("app:updateAppConfig", (_event, config: Partial<{ fontSize: number; autoLaunch: boolean }>) => {
+    const current = store.get("appConfig") || { fontSize: 14, autoLaunch: false };
+    const merged = { ...current, ...config };
+    store.set("appConfig", merged);
+
+    // 实际设置开机自启
+    if (config.autoLaunch !== undefined) {
+      app.setLoginItemSettings({
+        openAtLogin: config.autoLaunch,
+        openAsHidden: true,
+      });
+    }
+
+    return { success: true };
+  });
+
+  ipcMain.handle("app:getProxy", () => {
+    return store.get("globalProxy") || null;
+  });
+
+  ipcMain.handle("app:setProxy", (_event, proxy: ProxyConfig | null) => {
+    store.set("globalProxy", proxy);
+    return { success: true };
+  });
+
+  ipcMain.handle("app:testProxy", async (_event, proxy: ProxyConfig) => {
+    const startTime = Date.now();
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch("https://httpbin.org/ip", {
+        method: "GET",
+        signal: controller.signal,
+        proxy: buildProxyOption(proxy),
+      } as any);
+      clearTimeout(timeout);
+      const data: any = await res.json().catch(() => ({}));
+      const origin = data?.origin || "未知";
+      return { success: true, latency: Date.now() - startTime, status: res.status, ip: origin };
+    } catch (err: any) {
+      const msg = err.name === "AbortError"
+        ? "连接超时，请检查代理地址和端口是否正确"
+        : (err.message || String(err));
+      return { success: false, error: msg, latency: Date.now() - startTime };
+    }
+  });
+
+  ipcMain.handle("app:getDataPath", () => {
+    return app.getPath("userData");
+  });
+
+  ipcMain.handle("app:getVersion", () => {
+    return app.getVersion();
+  });
+
+  ipcMain.handle("app:clearCache", async () => {
+    // 保留网关配置和会话数据，清除用量统计和日志
+    store.set("usageStats", { totalTokens: 0, totalRequests: 0, dailyStats: [], gatewayStats: {} });
+    return { success: true };
   });
 }
 
@@ -1964,10 +2161,51 @@ function injectDomInspectorScript(): string {
 app.whenReady().then(async () => {
   // 先初始化配置存储
   await initStore();
+  // 应用开机自启设置
+  const appConfig = store.get("appConfig") || { fontSize: 14, autoLaunch: false };
+  if (appConfig.autoLaunch) {
+    app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
+  }
   // 再设置 IPC 通信
   setupIpcHandlers();
+  // 注册新 Agent 系统 IPC（Tool/Skill/Plugin/MCP 管理）
+  const { registerAgentIPC, initMemorySystem, getAgentSystem } = await import("./agent-ipc.js");
+  registerAgentIPC(store);
+  // 初始化记忆系统（RAG + 向量记忆），使用记忆系统独立的 Embedding 配置
+  try {
+    const savedMemCfg = store.get("memoryConfig") || {};
+    const embBaseUrl = savedMemCfg.embeddingBaseUrl || "https://api.openai.com/v1";
+    const embApiKey = savedMemCfg.embeddingApiKey || "";
+    const embModel = savedMemCfg.embeddingModel || "text-embedding-3-small";
+    // 如果记忆系统没有独立 API Key，回退到当前对话模型的 Key
+    let apiKey = embApiKey;
+    if (!apiKey) {
+      const activeModelId = store.get("activeModelId");
+      const models = store.get("models") as ModelConfig[];
+      const activeModel = models.find((m: ModelConfig) => m.id === activeModelId);
+      if (activeModel?.apiKey) apiKey = activeModel.apiKey;
+    }
+    initMemorySystem({
+      baseUrl: embBaseUrl,
+      apiKey: apiKey || undefined,
+      model: embModel,
+    });
+  } catch {
+    initMemorySystem();
+  }
   // 初始化 Claude Agent
   await initClaudeAgent();
+  // 将 MCP 工具注入 Claude Agent
+  try {
+    const { getAgentSystem } = await import("./agent-ipc.js");
+    const agentSys = getAgentSystem();
+    if (agentSys && claudeAgentInstance) {
+      claudeAgentInstance.setMCPClient(agentSys.mcpClient);
+      console.log("[Main] MCP 客户端已注入 Claude Agent");
+    }
+  } catch (e) {
+    console.warn("[Main] MCP 注入失败:", e);
+  }
   // 最后创建窗口
   createMainWindow();
 

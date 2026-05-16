@@ -19,6 +19,10 @@ import {
   ChevronRight,
   ChevronDown,
   Settings,
+  Wrench,
+  Layers,
+  Puzzle,
+  Bot,
 } from "lucide-react";
 import { Button } from "./ui/button";
 
@@ -663,7 +667,48 @@ const Sidebar: React.FC = () => {
         )}
       </div>
 
-      {/* 底部设置按钮 */}
+      {/* Agent 系统导航 */}
+      <div className="border-t border-border">
+        <div className="px-3 py-1.5">
+          <span className="text-[10px] font-medium text-muted-foreground/50 uppercase tracking-wider">Agent 系统</span>
+        </div>
+        <div className="px-1.5 pb-1 space-y-0.5">
+          <button
+            className="flex items-center gap-2 w-full px-3 py-1.5 text-xs rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+            onClick={() => useAppStore.getState().setShowSettings(true, "tools")}
+            title="工具中心"
+          >
+            <Wrench className="h-3.5 w-3.5" />
+            工具中心
+          </button>
+          <button
+            className="flex items-center gap-2 w-full px-3 py-1.5 text-xs rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+            onClick={() => useAppStore.getState().setShowSettings(true, "skills")}
+            title="技能中心"
+          >
+            <Layers className="h-3.5 w-3.5" />
+            技能中心
+          </button>
+          <button
+            className="flex items-center gap-2 w-full px-3 py-1.5 text-xs rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+            onClick={() => useAppStore.getState().setShowSettings(true, "plugins")}
+            title="插件系统"
+          >
+            <Puzzle className="h-3.5 w-3.5" />
+            插件系统
+          </button>
+          <button
+            className="flex items-center gap-2 w-full px-3 py-1.5 text-xs rounded-md hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"
+            onClick={() => useAppStore.getState().setShowSettings(true, "agent")}
+            title="Agent 设置"
+          >
+            <Bot className="h-3.5 w-3.5" />
+            Agent 设置
+          </button>
+        </div>
+      </div>
+
+      {/* 系统设置按钮 */}
       <div className="border-t border-border p-2">
         <button
           className="flex items-center gap-2 w-full px-3 py-2 text-sm rounded-lg hover:bg-accent transition-colors text-muted-foreground hover:text-foreground"

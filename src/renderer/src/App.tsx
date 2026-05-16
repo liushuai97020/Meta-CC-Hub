@@ -143,6 +143,9 @@ const App: React.FC = () => {
     loadProfiles();
     useAppStore.getState().loadRecentProjects();
     useAppStore.getState().loadPreviewUrlHistory();
+    useAppStore.getState().loadFontSize();
+    useAppStore.getState().loadAutoLaunch();
+    useAppStore.getState().loadGlobalProxy();
 
     // 设置 CSS 变量初始值（拖拽性能优化用）
     const el = containerRef.current;

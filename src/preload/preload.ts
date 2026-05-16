@@ -177,6 +177,96 @@ const api = {
   },
 
   // ========================
+  // Agent V2（增强版 Agent 系统：Tool/Skill/Plugin/MCP）
+  // ========================
+  agentV2: {
+    // 工具管理
+    getTools: () => ipcRenderer.invoke("agent-v2:getTools"),
+    getToolLogs: (filter?: { sourceType?: string; sourceName?: string; status?: string; startTime?: number; endTime?: number; limit?: number; offset?: number }) =>
+      ipcRenderer.invoke("agent-v2:getToolLogs", filter),
+    clearToolLogs: (filter?: { sourceType?: string; sourceName?: string }) =>
+      ipcRenderer.invoke("agent-v2:clearToolLogs", filter),
+
+    getLogStats: () => ipcRenderer.invoke("agent-v2:getLogStats"),
+    cleanOldLogs: (daysAgo?: number) => ipcRenderer.invoke("agent-v2:cleanOldLogs", daysAgo),
+    removeTool: (toolName: string) =>
+      ipcRenderer.invoke("agent-v2:removeTool", toolName),
+    // MCP 服务器管理
+    getServers: () => ipcRenderer.invoke("agent-v2:getServers"),
+    addServer: (name: string, config: Record<string, unknown>) =>
+      ipcRenderer.invoke("agent-v2:addServer", name, config),
+    removeServer: (name: string) =>
+      ipcRenderer.invoke("agent-v2:removeServer", name),
+    restartServer: (name: string) =>
+      ipcRenderer.invoke("agent-v2:restartServer", name),
+    reloadMCP: () => ipcRenderer.invoke("agent-v2:reloadMCP"),
+    getGlobalMCPConfig: () =>
+      ipcRenderer.invoke("agent-v2:getGlobalMCPConfig"),
+    saveGlobalMCPConfig: (rawJson: string) =>
+      ipcRenderer.invoke("agent-v2:saveGlobalMCPConfig", rawJson),
+
+    // 技能管理
+    getSkills: () => ipcRenderer.invoke("agent-v2:getSkills"),
+    refreshSkills: () => ipcRenderer.invoke("agent-v2:refreshSkills"),
+    executeSkill: (skillId: string, params?: Record<string, unknown>) =>
+      ipcRenderer.invoke("agent-v2:executeSkill", skillId, params),
+
+    // 插件管理
+    getPlugins: () => ipcRenderer.invoke("agent-v2:getPlugins"),
+    enablePlugin: (pluginId: string) => ipcRenderer.invoke("agent-v2:enablePlugin", pluginId),
+    disablePlugin: (pluginId: string) => ipcRenderer.invoke("agent-v2:disablePlugin", pluginId),
+
+    // 内置工具
+    getBuiltinTools: () => ipcRenderer.invoke("agent-v2:getBuiltinTools"),
+
+    // 本地导入
+    importSkill: (filePath: string) => ipcRenderer.invoke("agent-v2:importSkill", filePath),
+    importPlugin: (filePath: string) => ipcRenderer.invoke("agent-v2:importPlugin", filePath),
+    importTool: (filePath: string) => ipcRenderer.invoke("agent-v2:importTool", filePath),
+
+    // Agent 配置
+    getConfig: () => ipcRenderer.invoke("agent-v2:getConfig"),
+    updateConfig: (config: { agent?: Record<string, unknown>; mcp?: Record<string, unknown> }) =>
+      ipcRenderer.invoke("agent-v2:updateConfig", config),
+
+    // 系统状态
+    getStatus: () => ipcRenderer.invoke("agent-v2:getStatus"),
+
+    // Agent 执行（增强版）
+    sendMessage: (message: string, history?: Array<{ role: string; content: string }>) =>
+      ipcRenderer.invoke("agent-v2:sendMessage", { message, history }),
+    abort: () => ipcRenderer.invoke("agent-v2:abort"),
+
+    // 流式事件监听
+    onStatus: (callback: (status: string) => void) => {
+      ipcRenderer.on("agent-v2:status", (_event, status) => callback(status));
+    },
+    onChunk: (callback: (text: string) => void) => {
+      ipcRenderer.on("agent-v2:chunk", (_event, text) => callback(text));
+    },
+    onToolStart: (callback: (data: { toolName: string; input: Record<string, unknown> }) => void) => {
+      ipcRenderer.on("agent-v2:tool-start", (_event, data) => callback(data));
+    },
+    onToolEnd: (callback: (data: { toolName: string; output: unknown; status: string }) => void) => {
+      ipcRenderer.on("agent-v2:tool-end", (_event, data) => callback(data));
+    },
+    onDone: (callback: (usage: { inputTokens: number; outputTokens: number }) => void) => {
+      ipcRenderer.on("agent-v2:done", (_event, usage) => callback(usage));
+    },
+    onError: (callback: (error: string) => void) => {
+      ipcRenderer.on("agent-v2:error", (_event, error) => callback(error));
+    },
+    removeListeners: () => {
+      ipcRenderer.removeAllListeners("agent-v2:status");
+      ipcRenderer.removeAllListeners("agent-v2:chunk");
+      ipcRenderer.removeAllListeners("agent-v2:tool-start");
+      ipcRenderer.removeAllListeners("agent-v2:tool-end");
+      ipcRenderer.removeAllListeners("agent-v2:done");
+      ipcRenderer.removeAllListeners("agent-v2:error");
+    },
+  },
+
+  // ========================
   // 主题
   // ========================
   theme: {
@@ -189,6 +279,15 @@ const api = {
   // ========================
   app: {
     getConfig: () => ipcRenderer.invoke("app:getConfig"),
+    getAppConfig: () => ipcRenderer.invoke("app:getAppConfig"),
+    updateAppConfig: (config: Partial<{ fontSize: number; autoLaunch: boolean }>) =>
+      ipcRenderer.invoke("app:updateAppConfig", config),
+    getProxy: () => ipcRenderer.invoke("app:getProxy"),
+    setProxy: (proxy: ProxyConfig | null) => ipcRenderer.invoke("app:setProxy", proxy),
+    testProxy: (proxy: ProxyConfig) => ipcRenderer.invoke("app:testProxy", proxy),
+    getDataPath: () => ipcRenderer.invoke("app:getDataPath"),
+    getVersion: () => ipcRenderer.invoke("app:getVersion"),
+    clearCache: () => ipcRenderer.invoke("app:clearCache"),
   },
 
   // ========================
@@ -202,6 +301,44 @@ const api = {
       ipcRenderer.invoke("projects:removeRecent", projectPath),
     getSessionsByProject: (projectPath: string) =>
       ipcRenderer.invoke("projects:getSessionsByProject", projectPath),
+  },
+
+  // ========================
+  // 记忆系统（RAG + 向量记忆）
+  // ========================
+  memory: {
+    augmentQuery: (query: string, sessionId: string, systemPrompt: string) =>
+      ipcRenderer.invoke("memory:augmentQuery", query, sessionId, systemPrompt),
+    retrieveMemories: (query: string, sessionId?: string) =>
+      ipcRenderer.invoke("memory:retrieveMemories", query, sessionId),
+
+    createSession: (id: string, title: string) =>
+      ipcRenderer.invoke("memory:createSession", id, title),
+    getSessions: () => ipcRenderer.invoke("memory:getSessions"),
+    deleteSession: (id: string) =>
+      ipcRenderer.invoke("memory:deleteSession", id),
+
+    addMessage: (msg: { id: string; sessionId: string; role: string; content: string; timestamp: string }) =>
+      ipcRenderer.invoke("memory:addMessage", msg),
+    getSessionMessages: (sessionId: string, limit?: number, offset?: number) =>
+      ipcRenderer.invoke("memory:getSessionMessages", sessionId, limit, offset),
+
+    memorize: (messageId: string, sessionId: string, text: string, summary?: string) =>
+      ipcRenderer.invoke("memory:memorize", messageId, sessionId, text, summary),
+    memorizeSession: (sessionId: string) =>
+      ipcRenderer.invoke("memory:memorizeSession", sessionId),
+
+    getConfig: () => ipcRenderer.invoke("memory:getConfig"),
+    updateConfig: (config: Record<string, unknown>) =>
+      ipcRenderer.invoke("memory:updateConfig", config),
+
+    logUsage: (data: { tokens: number; requests: number; gatewayId?: string; gatewayName?: string }) =>
+      ipcRenderer.invoke("memory:logUsage", data),
+    getUsageStats: (startDate?: string, endDate?: string) =>
+      ipcRenderer.invoke("memory:getUsageStats", startDate, endDate),
+
+    getStats: () => ipcRenderer.invoke("memory:getStats"),
+    clearAll: () => ipcRenderer.invoke("memory:clearAll"),
   },
 
   // ========================

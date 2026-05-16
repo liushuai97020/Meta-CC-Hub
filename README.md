@@ -11,6 +11,11 @@
 - **快捷预设** — 内置 Anthropic Claude、OpenAI、Google Gemini、DeepSeek、通义千问、智谱 GLM、月之暗面 Moonshot、SiliconFlow、零一万物 Yi、MiniMax、Ollama 等主流模型一键填充
 - **编辑/保存/取消工作流** — 已有配置支持编辑模式，所有改动本地暂存，确认后统一保存
 - **Agent 工具链** — 集成本地 Read / Edit / Write / Bash 工具，支持多轮工具调用
+- **Agent V2 增强系统** — MCP 协议服务器管理（stdio/SSE/HTTP），技能与插件热插拔，工具调用日志 SQLite 持久化
+- **工具中心** — 一站式管理 MCP 工具 + 内置工具 + 本地导入工具，可视化日志查询与筛选
+- **技能 & 插件** — 支持 Claude Code 兼容的 SKILL.md 格式，本地导入与热加载
+- **RAG 向量记忆** — 本地嵌入向量记忆，跨会话上下文持久化，节省 Token
+- **安装向导** — 全新用户引导流程
 - **流式对话** — 实时流式输出，支持中途中断，显示 Token 用量
 - **多会话管理** — 标签页式会话切换，按项目自动分组，支持归档
 - **三栏布局** — 左侧文件树/会话列表 | 中间对话区 | 右侧预览/轨迹面板，均支持拖拽调整宽度
@@ -42,36 +47,65 @@
 
 ```
 src/
-├── main/               # Electron 主进程
-│   ├── main.ts         # 窗口管理、IPC 通信、网关配置持久化
-│   ├── claude-agent.ts # AI Agent 核心（Anthropic / OpenAI 双格式请求 + 本地工具执行）
-│   └── types.d.ts      # 主进程类型定义
-├── renderer/           # 渲染进程（React）
-│   └── src/
-│       ├── main.tsx            # 入口
-│       ├── App.tsx             # 根组件（三栏布局 + 主题）
-│       ├── components/         # UI 组件
-│       │   ├── ChatArea.tsx    # 对话区域（流式消息）
-│       │   ├── Sidebar.tsx     # 左侧边栏（会话/文件树）
-│       │   ├── RightPanel.tsx  # 右侧面板（预览/标注轨迹）
-│       │   ├── TitleBar.tsx    # 自定义标题栏
-│       │   ├── SessionTabs.tsx # 会话标签页
-│       │   ├── CodeViewer.tsx  # 代码查看器
-│       │   ├── ResizeHandle.tsx# 拖拽调整手柄
-│       │   └── ui/             # 基础 UI 组件
-│       ├── pages/
-│       │   └── ModelSettings.tsx # 网关配置页（预设 + 编辑工作流）
-│       ├── stores/             # Zustand 状态管理
-│       │   ├── appStore.ts     # 应用全局状态
-│       │   ├── sessionStore.ts # 会话状态
-│       │   ├── modelStore.ts   # 模型配置状态
-│       │   └── gatewayStore.ts # 网关配置状态
-│       └── types/              # 渲染进程类型定义
-│           └── global.d.ts
-├── preload/            # 预加载脚本（contextBridge 安全暴露 API）
-│   ├── preload.ts
+├── agent/                   # Agent V2 系统核心
+│   ├── index.ts             # 系统初始化与模块聚合
+│   ├── engine.ts            # Agent 执行引擎
+│   ├── types.ts             # 类型定义（ToolCallLog, AgentConfig 等）
+│   ├── mcp/                 # MCP 协议客户端
+│   │   ├── client.ts        # 连接管理 + 工具调用 + 日志记录
+│   │   ├── config.ts        # 全局 MCP 配置（JSON 读写）
+│   │   └── server-manager.ts # 服务器进程管理（stdio/HTTP/SSE）
+│   ├── tools/               # 工具管理
+│   │   └── manager.ts       # 内置工具 + 本地导入/启用/禁用
+│   ├── skills/              # 技能管理
+│   │   └── manager.ts       # SKILL.md 解析 + 本地导入/执行
+│   ├── plugins/             # 插件管理
+│   │   └── manager.ts       # 插件安装/启用/禁用 + 工具/技能绑定
+│   ├── memory/              # RAG 向量记忆
+│   │   ├── memory-manager.ts # 记忆系统核心（会话/消息/向量化）
+│   │   ├── rag-engine.ts    # 检索增强生成引擎
+│   │   ├── embedding/       # 嵌入向量提供者
+│   │   └── vector-db/       # 向量数据库
+│   └── logger/              # 调用日志持久化
+│       ├── database.ts      # SQLite（建表/查询/级联删除/时间范围）
+│       └── log-manager.ts   # 日志管理器
+├── main/                    # Electron 主进程
+│   ├── main.ts              # 窗口管理、IPC 通信、配置持久化
+│   ├── claude-agent.ts      # AI Agent 核心（双 API 格式 + 工具执行）
+│   ├── agent-ipc.ts         # Agent V2 IPC 处理器
 │   └── types.d.ts
-└── shared/             # 共享类型定义与常量
+├── renderer/                # 渲染进程（React）
+│   └── src/
+│       ├── main.tsx
+│       ├── App.tsx
+│       ├── components/
+│       │   ├── ChatArea.tsx      # 对话区域（流式消息 + 标签）
+│       │   ├── Sidebar.tsx       # 左侧边栏
+│       │   ├── RightPanel.tsx    # 右侧面板（预览/标注）
+│       │   ├── TitleBar.tsx      # 自定义标题栏
+│       │   ├── ResizeHandle.tsx  # 拖拽调整手柄
+│       │   ├── chat/
+│       │   │   ├── CommandMenu.tsx  # `/` 命令面板
+│       │   │   └── TagChip.tsx      # 标签组件
+│       │   └── ui/
+│       │       └── Dialog.tsx
+│       ├── pages/
+│       │   ├── ModelSettings.tsx       # 网关配置页
+│       │   └── agent/
+│       │       ├── AgentToolCenter.tsx     # 工具中心
+│       │       ├── AgentSkillCenter.tsx    # 技能管理
+│       │       ├── AgentPluginMarket.tsx   # 插件市场
+│       │       ├── AgentSettingsPage.tsx   # Agent 设置
+│       │       └── MemorySettingsPanel.tsx # 记忆系统设置
+│       ├── stores/
+│       │   ├── appStore.ts       # 应用全局状态
+│       │   ├── sessionStore.ts   # 会话状态
+│       │   └── agentStore.ts     # Agent V2 系统状态
+│       └── types/
+│           └── global.d.ts
+├── preload/                 # 预加载脚本
+│   └── preload.ts
+└── shared/                  # 共享类型
     └── types.ts
 ```
 

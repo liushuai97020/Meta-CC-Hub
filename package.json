@@ -1,16 +1,17 @@
 {
   "name": "metacode",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "description": "MetaCode  - 跨平台桌面 AI 编程助手",
   "main": "dist/main/main/main.js",
   "scripts": {
-    "dev": "concurrently \"npm run dev:renderer\" \"npm run dev:main\"",
+    "dev": "npm run build:preload && concurrently \"npm run dev:renderer\" \"npm run dev:main\"",
     "dev:renderer": "vite",
     "dev:main": "cross-env NODE_ENV=development electron .",
     "build": "npm run build:preload && npm run build:renderer && npm run build:main",
     "build:renderer": "vite build",
     "build:main": "tsc -p tsconfig.main.json",
     "build:preload": "tsc -p tsconfig.preload.json",
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
     "start": "cross-env NODE_ENV=production electron .",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
@@ -25,6 +26,11 @@
     "files": [
       "dist/**/*",
       "!src/**/*"
+    ],
+    "externals": [
+      "better-sqlite3",
+      "sqlite-vec",
+      "sqlite-vec-windows-x64"
     ],
     "icon": "build/icon",
     "win": {
@@ -55,7 +61,10 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.139",
+    "@composio/client": "^0.1.0-alpha.72",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@monaco-editor/react": "^4.7.0",
+    "better-sqlite3": "^12.10.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "electron-store": "^11.0.2",
@@ -64,12 +73,17 @@
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "recharts": "^3.8.1",
+    "sqlite-vec": "^0.1.3",
+    "sqlite-vec-windows-x64": "^0.1.3",
     "tailwind-merge": "^3.6.0",
     "uuid": "^14.0.0",
     "zustand": "^5.0.13"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.7.1",
     "@tailwindcss/postcss": "^4.3.0",
+    "@types/adm-zip": "^0.5.8",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.7.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

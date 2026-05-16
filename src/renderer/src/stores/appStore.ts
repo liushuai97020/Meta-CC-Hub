@@ -14,6 +14,21 @@ interface AppState {
   setTheme: (theme: "light" | "dark") => void;
   toggleTheme: () => void;
 
+  // 高级设置 - 字体大小
+  fontSize: number;
+  setFontSize: (size: number) => void;
+  loadFontSize: () => Promise<void>;
+
+  // 高级设置 - 开机自启
+  autoLaunch: boolean;
+  setAutoLaunch: (enabled: boolean) => void;
+  loadAutoLaunch: () => Promise<void>;
+
+  // 高级设置 - 全局代理
+  globalProxy: ProxyConfig | null;
+  setGlobalProxy: (proxy: ProxyConfig | null) => void;
+  loadGlobalProxy: () => Promise<void>;
+
   // 侧边栏
   sidebarOpen: boolean;
   sidebarWidth: number;
@@ -49,7 +64,8 @@ interface AppState {
 
   // 设置页面
   showSettings: boolean;
-  setShowSettings: (show: boolean) => void;
+  settingsInitialTab: string;
+  setShowSettings: (show: boolean, initialTab?: string) => void;
   toggleSettings: () => void;
 
   // 代码预览状态
@@ -121,6 +137,49 @@ export const useAppStore = create<AppState>((set, get) => ({
       window.electronAPI?.theme.set(newTheme);
       return { theme: newTheme };
     });
+  },
+
+  // 高级设置 - 字体大小
+  fontSize: 14,
+  setFontSize: (size) => {
+    set({ fontSize: size });
+    window.electronAPI?.app.updateAppConfig({ fontSize: size });
+    document.documentElement.style.fontSize = `${size}px`;
+  },
+  loadFontSize: async () => {
+    try {
+      const config = await window.electronAPI?.app.getAppConfig();
+      if (config?.fontSize) {
+        set({ fontSize: config.fontSize });
+        document.documentElement.style.fontSize = `${config.fontSize}px`;
+      }
+    } catch { /* ignore */ }
+  },
+
+  // 高级设置 - 开机自启
+  autoLaunch: false,
+  setAutoLaunch: (enabled) => {
+    set({ autoLaunch: enabled });
+    window.electronAPI?.app.updateAppConfig({ autoLaunch: enabled });
+  },
+  loadAutoLaunch: async () => {
+    try {
+      const config = await window.electronAPI?.app.getAppConfig();
+      if (config) set({ autoLaunch: config.autoLaunch || false });
+    } catch { /* ignore */ }
+  },
+
+  // 高级设置 - 全局代理
+  globalProxy: null,
+  setGlobalProxy: (proxy) => {
+    set({ globalProxy: proxy });
+    window.electronAPI?.app.setProxy(proxy);
+  },
+  loadGlobalProxy: async () => {
+    try {
+      const proxy = await window.electronAPI?.app.getProxy();
+      if (proxy) set({ globalProxy: proxy });
+    } catch { /* ignore */ }
   },
 
   // 侧边栏
@@ -211,8 +270,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // 设置页面
   showSettings: false,
-  setShowSettings: (show) => set({ showSettings: show }),
-  toggleSettings: () => set((state) => ({ showSettings: !state.showSettings })),
+  settingsInitialTab: "gateway",
+  setShowSettings: (show, initialTab) => set({ showSettings: show, settingsInitialTab: initialTab || "gateway" }),
+  toggleSettings: () => set((state) => ({ showSettings: !state.showSettings, settingsInitialTab: "gateway" })),
 
   // 代码预览
   codePreviewFile: null,

@@ -312,6 +312,8 @@ interface ElectronAPI {
       width: number;
       height: number;
     }) => Promise<{ success: boolean; data?: string; error?: string }>;
+    getUrlHistory: () => Promise<string[]>;
+    setUrlHistory: (history: string[]) => Promise<{ success: boolean }>;
   };
   models: {
     getAll: () => Promise<ModelConfig[]>;
@@ -421,18 +423,92 @@ interface ElectronAPI {
     /** 清理所有流式监听器 */
     removeListeners: () => void;
   };
+  /** Agent V2 MCP 增强版系统 */
+  agentV2: {
+    // 工具管理
+    getTools: () => Promise<any[]>;
+    getBuiltinTools: () => Promise<any[]>;
+    getToolLogs: (filter?: { sourceType?: string; sourceName?: string; status?: string; startTime?: number; endTime?: number; limit?: number; offset?: number }) => Promise<any[]>;
+    clearToolLogs: (filter?: { sourceType?: string; sourceName?: string }) => Promise<{ success: boolean; deleted?: number }>;
+    getLogStats: () => Promise<{ totalCount: number; dbSize: number; dbPath?: string }>;
+    cleanOldLogs: (daysAgo?: number) => Promise<{ success: boolean; deleted: number }>;
+    removeTool: (toolName: string) => Promise<{ success: boolean; error?: string }>;
+    setToolEnabled: (toolName: string, enabled: boolean) => Promise<{ success: boolean; error?: string }>;
+    // MCP 服务器管理
+    getServers: () => Promise<any[]>;
+    addServer: (name: string, config: Record<string, unknown>) => Promise<{ success: boolean; error?: string }>;
+    removeServer: (name: string) => Promise<{ success: boolean; error?: string }>;
+    restartServer: (name: string) => Promise<{ success: boolean; error?: string }>;
+    reloadMCP: () => Promise<{ success: boolean; error?: string }>;
+    getGlobalMCPConfig: () => Promise<{ success: boolean; data?: string; error?: string }>;
+    saveGlobalMCPConfig: (rawJson: string) => Promise<{ success: boolean; error?: string }>;
+    // 技能管理
+    getSkills: () => Promise<any[]>;
+    refreshSkills: () => Promise<{ success: boolean; error?: string }>;
+    executeSkill: (skillId: string, params?: Record<string, unknown>) => Promise<{ success: boolean; data?: any; error?: string }>;
+    // 插件管理
+    getPlugins: () => Promise<any[]>;
+    enablePlugin: (pluginId: string) => Promise<{ success: boolean }>;
+    disablePlugin: (pluginId: string) => Promise<{ success: boolean }>;
+    // 本地导入
+    importSkill: (filePath: string) => Promise<{ success: boolean; data?: any; count?: number; error?: string }>;
+    importPlugin: (filePath: string) => Promise<{ success: boolean; data?: any; count?: number; error?: string }>;
+    importTool: (filePath: string) => Promise<{ success: boolean; data?: any; count?: number; error?: string }>;
+    // Agent 配置
+    getConfig: () => Promise<{ agent: any } | null>;
+    updateConfig: (config: { agent?: Record<string, unknown> }) => Promise<{ success: boolean }>;
+    // 系统状态
+    getStatus: () => Promise<{ ready: boolean; serverCount?: number; toolCount?: number; builtinToolCount?: number; skillCount?: number; pluginCount?: number; agentEngine?: string }>;
+    // Agent 执行
+    sendMessage: (message: string, history?: Array<{ role: string; content: string }>) => Promise<{ success: boolean; data?: any; error?: string }>;
+    abort: () => Promise<{ success: boolean }>;
+    // 流式事件
+    onStatus: (callback: (status: string) => void) => void;
+    onChunk: (callback: (text: string) => void) => void;
+    onToolStart: (callback: (data: { toolName: string; input: Record<string, unknown> }) => void) => void;
+    onToolEnd: (callback: (data: { toolName: string; output: unknown; status: string }) => void) => void;
+    onDone: (callback: (usage: { inputTokens: number; outputTokens: number }) => void) => void;
+    onError: (callback: (error: string) => void) => void;
+    removeListeners: () => void;
+  };
   theme: {
     get: () => Promise<"light" | "dark">;
     set: (theme: "light" | "dark") => Promise<{ success: boolean }>;
   };
   app: {
     getConfig: () => Promise<Record<string, unknown>>;
+    getAppConfig: () => Promise<{ fontSize: number; autoLaunch: boolean }>;
+    updateAppConfig: (config: Partial<{ fontSize: number; autoLaunch: boolean }>) => Promise<{ success: boolean }>;
+    getProxy: () => Promise<ProxyConfig | null>;
+    setProxy: (proxy: ProxyConfig | null) => Promise<{ success: boolean }>;
+    testProxy: (proxy: ProxyConfig) => Promise<{ success: boolean; latency: number; status?: number; error?: string; ip?: string }>;
+    getDataPath: () => Promise<string>;
+    getVersion: () => Promise<string>;
+    clearCache: () => Promise<{ success: boolean }>;
   };
   projects: {
     getRecent: () => Promise<string[]>;
     addRecent: (projectPath: string) => Promise<{ success: boolean }>;
     removeRecent: (projectPath: string) => Promise<{ success: boolean }>;
     getSessionsByProject: (projectPath: string) => Promise<SessionData[]>;
+  };
+  /** 记忆系统（RAG + 向量记忆） */
+  memory: {
+    augmentQuery: (query: string, sessionId: string, systemPrompt: string) => Promise<{ success: boolean; data?: any; error?: string }>;
+    retrieveMemories: (query: string, sessionId?: string) => Promise<{ success: boolean; data?: any; error?: string }>;
+    createSession: (id: string, title: string) => Promise<{ success: boolean; data?: any; error?: string }>;
+    getSessions: () => Promise<{ success: boolean; data?: any[] }>;
+    deleteSession: (id: string) => Promise<{ success: boolean }>;
+    addMessage: (msg: { id: string; sessionId: string; role: string; content: string; timestamp: string }) => Promise<{ success: boolean }>;
+    getSessionMessages: (sessionId: string, limit?: number, offset?: number) => Promise<{ success: boolean; data?: any[] }>;
+    memorize: (messageId: string, sessionId: string, text: string, summary?: string) => Promise<{ success: boolean; error?: string }>;
+    memorizeSession: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
+    getConfig: () => Promise<{ success: boolean; data?: any }>;
+    updateConfig: (config: Record<string, unknown>) => Promise<{ success: boolean }>;
+    logUsage: (data: { tokens: number; requests: number; gatewayId?: string; gatewayName?: string }) => Promise<{ success: boolean }>;
+    getUsageStats: (startDate?: string, endDate?: string) => Promise<{ success: boolean; data?: any }>;
+    getStats: () => Promise<{ success: boolean; data?: any }>;
+    clearAll: () => Promise<{ success: boolean }>;
   };
   on: (channel: string, callback: (...args: unknown[]) => void) => void;
   removeAllListeners: (channel: string) => void;

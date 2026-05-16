@@ -16,6 +16,7 @@ interface AgentConfig {
   maxTokens?: number;
   modelType?: ModelType;
   apiFormat?: "anthropic" | "openai";
+  proxy?: ProxyConfig;
 }
 
 export interface AgentResponse {
@@ -100,13 +101,35 @@ const TOOLS = [
       required: ["command"],
     },
   },
+  {
+    name: "getCurrentTime",
+    description: "获取当前日期和时间。当用户询问时间、日期时使用此工具。",
+    input_schema: {
+      type: "object",
+      properties: {
+        timezone: { type: "string", description: "时区（可选），例如 Asia/Shanghai、America/New_York" },
+      },
+    },
+  },
 ];
 
 export class ClaudeAgentManager {
   private config: AgentConfig | null = null;
   private abortController: AbortController | null = null;
+  private availableSkillsMd = "";
+  private mcpClient: any = null;
 
   constructor() {}
+
+  /** 设置可用技能列表 Markdown（用于 system prompt 让 agent 感知有哪些技能） */
+  setAvailableSkillsMd(md: string): void {
+    this.availableSkillsMd = md;
+  }
+
+  /** 注入 MCP 客户端，使 agent 可以调用 MCP 工具 */
+  setMCPClient(client: any): void {
+    this.mcpClient = client;
+  }
 
   async initialize(modelConfig: ModelConfig): Promise<void> {
     this.config = this.mapModelConfig(modelConfig);
@@ -174,6 +197,16 @@ export class ClaudeAgentManager {
     const url = `${baseUrl}/v1/messages`;
     const model = this.config!.modelName || "claude-sonnet-4-6";
     const maxTokens = this.config!.maxTokens || 8192;
+    // 合并内置工具和 MCP 工具
+    const mcpTools = this.mcpClient?.getAllTools() || [];
+    const allTools = [
+      ...TOOLS,
+      ...mcpTools.map((t: any) => ({
+        name: t.name,
+        description: t.description || "",
+        input_schema: t.inputSchema,
+      })),
+    ];
     const systemPrompt = this.buildSystemPrompt(model);
     const messages: any[] = [
       ...(history || []),
@@ -195,7 +228,7 @@ export class ClaudeAgentManager {
         system: systemPrompt,
         messages,
         stream: true,
-        tools: TOOLS,
+        tools: allTools,
       });
 
       const headers: Record<string, string> = {
@@ -209,12 +242,21 @@ export class ClaudeAgentManager {
 
       let response: Response;
       try {
-        response = await fetch(url, {
+        const fetchOpts: RequestInit & { proxy?: any } = {
           method: "POST",
           headers,
           body,
           signal: this.abortController?.signal,
-        });
+        };
+        if (this.config?.proxy) {
+          fetchOpts.proxy = {
+            protocol: this.config.proxy.protocol,
+            host: this.config.proxy.host,
+            port: this.config.proxy.port,
+            ...(this.config.proxy.username ? { auth: `${this.config.proxy.username}:${this.config.proxy.password || ""}` } : {}),
+          };
+        }
+        response = await fetch(url, fetchOpts);
       } catch (err: any) {
         if (fullContent) break;
         throw err;
@@ -449,41 +491,142 @@ export class ClaudeAgentManager {
         }
       }
 
+      case "getCurrentTime": {
+        const now = new Date();
+        const tz = input.timezone || undefined;
+        try {
+          const timeStr = now.toLocaleString("zh-CN", { timeZone: tz });
+          return `当前时间: ${timeStr}${tz ? ` (时区: ${tz})` : ""}`;
+        } catch {
+          return `当前时间: ${now.toLocaleString("zh-CN")}`;
+        }
+      }
+
       default:
+        if (this.mcpClient) {
+          const allMCP = this.mcpClient.getAllTools();
+          const tool = allMCP.find((t: any) => t.name === name);
+          if (tool) {
+            const result = await this.mcpClient.callTool(tool.serverName, name, input);
+            return typeof result.content === "string"
+              ? result.content
+              : JSON.stringify(result.content);
+          }
+        }
         throw new Error(`Unknown tool: ${name}`);
     }
   }
 
   /**
-   * 根据模型名称构建正确的 system prompt，避免模型错误自称为 Claude
+   * 根据模型名称构建正确的 system prompt
+   * - Claude 模型：依赖原生 tool_use API
+   * - 非 Claude 模型：使用 XML 标签格式让模型表达工具调用意图
    */
   private buildSystemPrompt(modelName: string): string {
     const isClaude = modelName.toLowerCase().includes("claude");
-    const identity = isClaude
-      ? "You are Claude, an AI assistant built by Anthropic."
-      : "You are a helpful AI assistant integrated into MetaCode, a cross-platform desktop AI programming assistant.";
+    const isLocal = this.config?.modelType === "local";
 
-    return [
-      identity,
-      "You are integrated into MetaCode, a cross-platform desktop AI programming assistant.",
-      "You have access to the following tools: Read, Edit, Write, Bash.",
-      "",
-      "When the user sends annotation modification requests, they will include file paths and line numbers. Follow these rules strictly:",
-      "1. Read the specified file using the Read tool (NOT Bash - never use cat/echo or other shell commands to read files).",
-      "2. The annotation shows the element structure with `...` to elide content. Read the actual file to see the real source code.",
-      "3. Apply the requested changes using Edit or Write tool. The user's instruction is about modifying the element's (text content, attributes, or styling) — NOT replacing the entire HTML block or changing the HTML tag name.",
-      "   CRITICAL: Preserve the element's tag name (e.g., <div>, <span>, <p>). Never change the tag name unless the user explicitly says so. '改为X' means change the text content to X, not change the tag to X.",
-      "4. Output ONLY the modification result in plain text. Example format:",
-      "   '已修改文件 X: 将 Y 改为 Z'",
-      "   Do NOT output: tool names (Read/Edit/Write/Bash), emojis/icons, code blocks, or intermediate steps.",
-      "   Do NOT say '已读取文件' or '正在读取' - just state the change itself.",
-      "   Do NOT ask for confirmation - the user has already reviewed the annotations.",
-      "5. Use Bash ONLY when explicitly needed (e.g., installing packages, running build commands).",
-      "   Do NOT use Bash to read, write, or edit files.",
-      "",
-      "CRITICAL: Do NOT include tool names, emojis, or step-by-step descriptions in your response.",
-      "Only output the final result of your work in natural language, nothing else.",
-    ].join("\n");
+    const parts: string[] = [];
+
+    if (isClaude) {
+      parts.push("You are Claude, an AI assistant built by Anthropic.");
+    } else {
+      parts.push("You are a helpful AI assistant named MetaCode, integrated into a cross-platform desktop AI programming assistant.");
+    }
+
+    parts.push("");
+
+    // ===== 工具定义（内置工具 + MCP 工具） =====
+    parts.push("=== AVAILABLE TOOLS (you MUST use them when needed) ===");
+    parts.push("");
+    parts.push("【内置工具】");
+    parts.push("- Read: 读取文件内容。参数: filePath");
+    parts.push("- Edit: 编辑文件（搜索替换）。参数: filePath, oldString, newString");
+    parts.push("- Write: 写入文件。参数: filePath, content");
+    parts.push("- Bash: 执行 shell 命令。参数: command, cwd(可选)");
+    parts.push("- getCurrentTime: 获取当前日期和时间。参数: timezone(可选)");
+    parts.push("");
+
+    // 动态注入 MCP 工具列表
+    const mcpTools = this.mcpClient?.getAllTools() || [];
+    if (mcpTools.length > 0) {
+      parts.push("【MCP 外部工具（联网、搜索等）】");
+      for (const t of mcpTools) {
+        const desc = t.description || "无描述";
+        const params = t.inputSchema?.properties
+          ? Object.keys(t.inputSchema.properties as Record<string, unknown>).join(", ")
+          : "无参数";
+        parts.push(`- ${t.name}（来自 ${t.serverName}）: ${desc}。参数: ${params}`);
+      }
+      parts.push("");
+    }
+
+    // ===== 强制工具使用规则 =====
+    if (!isClaude) {
+      parts.push("=== CRITICAL RULES FOR TOOL USE ===");
+      parts.push("1. When user asks about time, date, or any real-time info → you MUST call getCurrentTime.");
+      parts.push("2. When user asks to read/edit/write files → you MUST call Read/Edit/Write.");
+      parts.push("3. When user asks to search the web, fetch a URL, get online info → you MUST use MCP tools like fetch.");
+      parts.push("4. NEVER tell the user to check something themselves. Use the appropriate tool instead.");
+      parts.push("");
+
+      if (!isLocal) {
+        parts.push("You have been given a set of functions/tools. When you need to use a tool, respond with a function call using the available functions. The system will execute the function and return the result.");
+        parts.push("");
+      } else {
+        parts.push("=== YOU MUST OUTPUT TOOL CALLS IN THIS EXACT XML FORMAT ===");
+        parts.push("When you need to use a tool, include the XML tag in your response:");
+        parts.push("");
+        parts.push('<tool name="getCurrentTime">');
+        parts.push("<timezone>Asia/Shanghai</timezone>");
+        parts.push("</tool>");
+        parts.push("");
+        parts.push("IMPORTANT: The XML tool tag will be extracted and executed automatically.");
+        parts.push("After getting the result, continue your response naturally.");
+        parts.push("");
+      }
+    } else {
+      parts.push("When the user asks for the time, use getCurrentTime. Read/edit/write files using the corresponding tools.");
+    }
+
+    parts.push("");
+
+    // ===== 标注模式 =====
+    parts.push("=== Annotation mode (only when user sends element annotations) ===");
+    parts.push("1. Read the file using Read (NOT Bash).");
+    parts.push("2. Apply changes using Edit or Write. Preserve the HTML tag name.");
+    parts.push("3. State the result briefly.");
+    parts.push("");
+
+    if (this.availableSkillsMd) {
+      parts.push("=== Available Skills ===");
+      parts.push(this.availableSkillsMd);
+    }
+
+    return parts.join("\n");
+  }
+
+  /**
+   * 从文本中解析 XML 格式的工具调用
+   * 格式: <tool name="toolName"><param>value</param></tool>
+   * 用于不支持原生 function calling 的模型
+   */
+  private parseXmlToolCalls(text: string): Array<{ name: string; args: Record<string, string> }> {
+    const calls: Array<{ name: string; args: Record<string, string> }> = [];
+    const regex = /<tool\s+name=["']([^"']+)["']>([\s\S]*?)<\/tool>/g;
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(text)) !== null) {
+      const name = match[1];
+      const body = match[2];
+      const args: Record<string, string> = {};
+      const argRegex = /<(\w+)>([\s\S]*?)<\/\1>/g;
+      let argMatch: RegExpExecArray | null;
+      while ((argMatch = argRegex.exec(body)) !== null) {
+        args[argMatch[1]] = argMatch[2].trim();
+      }
+      calls.push({ name, args });
+    }
+    return calls;
   }
 
   // ======================
@@ -497,7 +640,6 @@ export class ClaudeAgentManager {
     history?: Array<{ role: string; content: string }>,
   ): Promise<AgentResponse> {
     let baseUrl = (this.config!.baseUrl || "").replace(/\/+$/, "");
-    // 避免重复 /v1，如果 baseUrl 已是 /v1 则不再追加
     const chatEndpoint = baseUrl.endsWith("/v1")
       ? `${baseUrl}/chat/completions`
       : `${baseUrl}/v1/chat/completions`;
@@ -507,6 +649,25 @@ export class ClaudeAgentManager {
     callbacks.onStatus(`Querying ${model} via OpenAI-compatible API...`);
 
     this.abortController = new AbortController();
+
+    // 构建 tools（OpenAI function calling 格式）
+    const mcpTools = this.mcpClient?.getAllTools() || [];
+    const allToolDefs = [
+      ...TOOLS,
+      ...mcpTools.map((t: any) => ({
+        name: t.name,
+        description: t.description || "",
+        input_schema: t.inputSchema,
+      })),
+    ];
+    const openaiTools = allToolDefs.map((t) => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.input_schema,
+      },
+    }));
 
     const messages: any[] = [
       { role: "system", content: systemPrompt },
@@ -520,7 +681,7 @@ export class ClaudeAgentManager {
 
     for (let iteration = 0; iteration < 20; iteration++) {
       if (iteration > 0) {
-        callbacks.onStatus(`Continuing (step ${iteration + 1})...`);
+        callbacks.onStatus(`继续 (第 ${iteration + 1} 步)...`);
       }
 
       const body = JSON.stringify({
@@ -528,9 +689,11 @@ export class ClaudeAgentManager {
         messages,
         max_tokens: maxTokens,
         stream: true,
+        tools: openaiTools,
+        tool_choice: "auto",
       });
 
-      const response = await fetch(chatEndpoint, {
+      const response = await this.fetchWithRetry(chatEndpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -549,6 +712,9 @@ export class ClaudeAgentManager {
       const decoder = new TextDecoder();
       let buffer = "";
       let textAccumulator = "";
+      let reasoningAccumulator = "";
+      const tcAcc: Map<number, { id: string; name: string; args: string }> = new Map();
+      let hasToolCalls = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -570,10 +736,25 @@ export class ClaudeAgentManager {
               totalInputTokens = parsed.usage.prompt_tokens || 0;
               totalOutputTokens = parsed.usage.completion_tokens || 0;
             }
-            const delta = choice?.delta?.content;
-            if (delta) {
-              textAccumulator += delta;
-              callbacks.onChunk(delta);
+            const delta = choice?.delta;
+            if (delta?.content) {
+              textAccumulator += delta.content;
+              callbacks.onChunk(delta.content);
+            }
+            // DeepSeek 思考链内容（reasoning_content 必须保留在上下文中）
+            if (delta?.reasoning_content) {
+              reasoningAccumulator += delta.reasoning_content;
+            }
+            if (delta?.tool_calls) {
+              hasToolCalls = true;
+              for (const tc of delta.tool_calls) {
+                const idx = tc.index;
+                if (!tcAcc.has(idx)) tcAcc.set(idx, { id: "", name: "", args: "" });
+                const entry = tcAcc.get(idx)!;
+                if (tc.id) entry.id = tc.id;
+                if (tc.function?.name) entry.name = tc.function.name;
+                if (tc.function?.arguments) entry.args += tc.function.arguments;
+              }
             }
           } catch {
             // skip malformed lines
@@ -582,7 +763,65 @@ export class ClaudeAgentManager {
       }
 
       fullContent += textAccumulator;
-      // OpenAI 兼容 API 暂不支持工具调用，一次迭代后直接结束
+
+      // === priority 1: native tool_calls ===
+      if (hasToolCalls && tcAcc.size > 0) {
+        const sortedCalls = Array.from(tcAcc.entries())
+          .sort(([a], [b]) => a - b)
+          .map(([_, tc]) => ({
+            id: tc.id,
+            type: "function" as const,
+            function: { name: tc.name, arguments: tc.args },
+          }));
+        for (const c of sortedCalls) {
+          try { c.function.arguments = JSON.stringify(JSON.parse(c.function.arguments)); } catch { /* keep raw */ }
+        }
+        const assistantMsg: any = { role: "assistant", content: textAccumulator || null, tool_calls: sortedCalls };
+        // DeepSeek 要求保留 reasoning_content
+        if (reasoningAccumulator) {
+          assistantMsg.reasoning_content = reasoningAccumulator;
+        }
+        messages.push(assistantMsg);
+        for (const c of sortedCalls) {
+          let args: any = {};
+          try { args = JSON.parse(c.function.arguments); } catch { args = {}; }
+          callbacks.onToolUse(c.function.name, args);
+          try {
+            const result = await this.executeTool(c.function.name, args, cwd);
+            messages.push({ role: "tool", tool_call_id: c.id, content: typeof result === "string" ? result : JSON.stringify(result) });
+            callbacks.onToolResult(c.function.name, "success");
+          } catch (err: any) {
+            messages.push({ role: "tool", tool_call_id: c.id, content: `[Error] ${err.message}`, is_error: true });
+            callbacks.onToolResult(c.function.name, "error");
+          }
+        }
+        continue;
+      }
+
+      // === priority 2: XML-style tool calls ===
+      const xmlCalls = this.parseXmlToolCalls(textAccumulator);
+      if (xmlCalls.length > 0) {
+        const cleanContent = textAccumulator.replace(/<tool[\s\S]*?<\/tool>/g, "").trim();
+        const assistantMsg: any = { role: "assistant", content: cleanContent || null };
+        if (reasoningAccumulator) {
+          assistantMsg.reasoning_content = reasoningAccumulator;
+        }
+        messages.push(assistantMsg);
+        for (const xc of xmlCalls) {
+          callbacks.onToolUse(xc.name, xc.args);
+          try {
+            const result = await this.executeTool(xc.name, xc.args, cwd);
+            messages.push({ role: "user", content: `工具 "${xc.name}" 返回: ${typeof result === "string" ? result.slice(0, 2000) : JSON.stringify(result).slice(0, 2000)}` });
+            callbacks.onToolResult(xc.name, "success");
+          } catch (err: any) {
+            messages.push({ role: "user", content: `工具 "${xc.name}" 执行失败: ${err.message}` });
+            callbacks.onToolResult(xc.name, "error");
+          }
+        }
+        continue;
+      }
+
+      // === no tool calls -> done ===
       break;
     }
 
@@ -595,7 +834,7 @@ export class ClaudeAgentManager {
   }
 
   // ======================
-  // Ollama（local）
+  // Ollama（local）— 使用 OpenAI 兼容格式支持工具调用
   // ======================
 
   private async sendViaOllama(
@@ -607,75 +846,191 @@ export class ClaudeAgentManager {
       /\/$/,
       "",
     );
-    const url = `${baseUrl}/api/chat`;
+    // Ollama 支持 /v1/chat/completions (OpenAI 兼容)
+    const url = `${baseUrl}/v1/chat/completions`;
+    const model = this.config!.modelName || "qwen2.5";
+    const maxTokens = this.config!.maxTokens || 4096;
+    const systemPrompt = this.buildSystemPrompt(model);
 
-    callbacks.onStatus(`Calling Ollama ${this.config!.modelName}...`);
+    callbacks.onStatus(`Calling Ollama ${model}...`);
 
-    const body = JSON.stringify({
-      model: this.config!.modelName,
-      messages: [
-        ...(history || []),
-        { role: "user", content: message },
-      ],
-      stream: true,
-      options: { num_predict: this.config!.maxTokens || 2048 },
-    });
+    this.abortController = new AbortController();
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    });
+    // 构建工具列表（OpenAI 格式）
+    const mcpTools = this.mcpClient?.getAllTools() || [];
+    const allToolDefs = [
+      ...TOOLS,
+      ...mcpTools.map((t: any) => ({
+        name: t.name,
+        description: t.description || "",
+        input_schema: t.inputSchema,
+      })),
+    ];
+    const openaiTools = allToolDefs.map((t) => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.input_schema,
+      },
+    }));
 
-    if (!response.ok) {
-      throw new Error(`Ollama ${response.status}`);
-    }
+    const messages: any[] = [
+      { role: "system", content: systemPrompt },
+      ...(history || []),
+      { role: "user", content: message },
+    ];
 
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
     let fullContent = "";
-    let buffer = "";
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    for (let iteration = 0; iteration < 20; iteration++) {
+      if (iteration > 0) {
+        callbacks.onStatus(`继续 (第 ${iteration + 1} 步)...`);
+      }
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
+      const body = JSON.stringify({
+        model,
+        messages,
+        max_tokens: maxTokens,
+        stream: true,
+        tools: openaiTools,
+        tool_choice: "auto",
+      });
 
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const parsed = JSON.parse(line);
-          if (parsed.message?.content) {
-            fullContent += parsed.message.content;
-            callbacks.onChunk(parsed.message.content);
+      const response = await this.fetchWithRetry(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal: this.abortController?.signal,
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => "(no body)");
+        throw new Error(`Ollama ${response.status} ${errText}`);
+      }
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let textAccumulator = "";
+      let reasoningAccumulator = "";
+      const tcAcc: Map<number, { id: string; name: string; args: string }> = new Map();
+      let hasToolCalls = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith("data: ")) continue;
+          const data = trimmed.slice(6);
+          if (data === "[DONE]") continue;
+          try {
+            const parsed = JSON.parse(data);
+            const choice = parsed.choices?.[0];
+            if (parsed.usage) {
+              totalInputTokens = parsed.usage.prompt_tokens || totalInputTokens;
+              totalOutputTokens = parsed.usage.completion_tokens || totalOutputTokens;
+            }
+            const delta = choice?.delta;
+            if (delta?.content) {
+              textAccumulator += delta.content;
+              callbacks.onChunk(delta.content);
+            }
+            if (delta?.reasoning_content) {
+              reasoningAccumulator += delta.reasoning_content;
+            }
+            if (delta?.tool_calls) {
+              hasToolCalls = true;
+              for (const tc of delta.tool_calls) {
+                const idx = tc.index;
+                if (!tcAcc.has(idx)) tcAcc.set(idx, { id: "", name: "", args: "" });
+                const entry = tcAcc.get(idx)!;
+                if (tc.id) entry.id = tc.id;
+                if (tc.function?.name) entry.name = tc.function.name;
+                if (tc.function?.arguments) entry.args += tc.function.arguments;
+              }
+            }
+          } catch {
+            // skip malformed lines
           }
-          if (parsed.done) {
-            totalInputTokens = parsed.prompt_eval_count || 0;
-            totalOutputTokens = parsed.eval_count || 0;
-            callbacks.onStatus("Complete");
-            callbacks.onDone({
-              inputTokens: totalInputTokens,
-              outputTokens: totalOutputTokens,
-            });
-          }
-        } catch {
-          // skip malformed lines
         }
       }
+
+      fullContent += textAccumulator;
+
+      // priority 1: native tool_calls
+      if (hasToolCalls && tcAcc.size > 0) {
+        const sortedCalls = Array.from(tcAcc.entries())
+          .sort(([a], [b]) => a - b)
+          .map(([_, tc]) => ({
+            id: tc.id,
+            type: "function" as const,
+            function: { name: tc.name, arguments: tc.args },
+          }));
+        for (const c of sortedCalls) {
+          try { c.function.arguments = JSON.stringify(JSON.parse(c.function.arguments)); } catch { /* keep raw */ }
+        }
+        const assistantMsg: any = { role: "assistant", content: textAccumulator || null, tool_calls: sortedCalls };
+        if (reasoningAccumulator) {
+          assistantMsg.reasoning_content = reasoningAccumulator;
+        }
+        messages.push(assistantMsg);
+        for (const c of sortedCalls) {
+          let args: any = {};
+          try { args = JSON.parse(c.function.arguments); } catch { args = {}; }
+          callbacks.onToolUse(c.function.name, args);
+          try {
+            const result = await this.executeTool(c.function.name, args);
+            messages.push({ role: "tool", tool_call_id: c.id, content: typeof result === "string" ? result : JSON.stringify(result) });
+            callbacks.onToolResult(c.function.name, "success");
+          } catch (err: any) {
+            messages.push({ role: "tool", tool_call_id: c.id, content: `[Error] ${err.message}`, is_error: true });
+            callbacks.onToolResult(c.function.name, "error");
+          }
+        }
+        continue;
+      }
+
+      // priority 2: XML fallback
+      const xmlCalls = this.parseXmlToolCalls(textAccumulator);
+      if (xmlCalls.length > 0) {
+        const cleanContent = textAccumulator.replace(/<tool[\s\S]*?<\/tool>/g, "").trim();
+        const assistantMsg: any = { role: "assistant", content: cleanContent || null };
+        if (reasoningAccumulator) {
+          assistantMsg.reasoning_content = reasoningAccumulator;
+        }
+        messages.push(assistantMsg);
+        for (const xc of xmlCalls) {
+          callbacks.onToolUse(xc.name, xc.args);
+          try {
+            const result = await this.executeTool(xc.name, xc.args);
+            messages.push({ role: "user", content: `工具 "${xc.name}" 返回: ${typeof result === "string" ? result.slice(0, 2000) : JSON.stringify(result).slice(0, 2000)}` });
+            callbacks.onToolResult(xc.name, "success");
+          } catch (err: any) {
+            messages.push({ role: "user", content: `工具 "${xc.name}" 执行失败: ${err.message}` });
+            callbacks.onToolResult(xc.name, "error");
+          }
+        }
+        continue;
+      }
+
+      break;
     }
 
-    return {
-      content: fullContent || "(no content)",
-      usage: {
-        inputTokens: totalInputTokens || Math.ceil(message.length / 4),
-        outputTokens: totalOutputTokens || Math.ceil(fullContent.length / 4),
-      },
+    const usage = {
+      inputTokens: totalInputTokens || Math.ceil(message.length / 4),
+      outputTokens: totalOutputTokens || Math.ceil(fullContent.length / 4),
     };
+    callbacks.onDone(usage);
+    return { content: fullContent || "(no content)", usage };
   }
 
   // ======================
@@ -732,7 +1087,52 @@ export class ClaudeAgentManager {
       maxTokens: modelConfig.maxTokens,
       modelType: modelConfig.type,
       apiFormat: modelConfig.apiFormat,
+      proxy: modelConfig.proxy,
     };
+  }
+
+  /** 带重试的 fetch（处理网络瞬时错误，如 socket close/reset） */
+  private async fetchWithRetry(
+    url: string,
+    options: RequestInit,
+    maxRetries = 3,
+  ): Promise<Response> {
+    // 应用代理配置
+    const fetchOptions: RequestInit & { proxy?: any } = { ...options };
+    if (this.config?.proxy && !(fetchOptions as any).proxy) {
+      (fetchOptions as any).proxy = {
+        protocol: this.config.proxy.protocol,
+        host: this.config.proxy.host,
+        port: this.config.proxy.port,
+        ...(this.config.proxy.username ? { auth: `${this.config.proxy.username}:${this.config.proxy.password || ""}` } : {}),
+      };
+    }
+    let lastErr: Error | null = null;
+    for (let i = 0; i <= maxRetries; i++) {
+      try {
+        return await fetch(url, fetchOptions);
+      } catch (err: any) {
+        lastErr = err;
+        // 仅对网络层错误重试（socket close、reset、timeout 等），HTTP 错误不重试
+        const isNetworkError =
+          err?.cause?.code === "UND_ERR_SOCKET" ||
+          err?.cause?.code === "ECONNRESET" ||
+          err?.cause?.code === "ETIMEDOUT" ||
+          err?.cause?.code === "UND_ERR_CONNECT_TIMEOUT" ||
+          err?.code === "UND_ERR_SOCKET" ||
+          err?.code === "ECONNRESET" ||
+          err?.code === "ETIMEDOUT";
+        if (!isNetworkError || i === maxRetries) break;
+        const delay = Math.min(1000 * 2 ** i, 8000);
+        console.log(
+          `[ClaudeAgentManager] fetch 网络错误，${delay}ms 后重试 (${i + 1}/${maxRetries}):`,
+          err.message,
+        );
+        if (this.abortController?.signal.aborted) break;
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+    throw lastErr;
   }
 
   getConfig(): AgentConfig | null {

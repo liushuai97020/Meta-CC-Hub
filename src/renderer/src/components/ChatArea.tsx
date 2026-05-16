@@ -2,8 +2,11 @@
  * 中间对话区域组件
  * 包含消息列表、输入框、模型切换、发送/中断按钮
  */
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { cn } from "../utils/cn";
+import CommandMenu from "./chat/CommandMenu";
+import type { CommandItem, CommandMenuHandle } from "./chat/CommandMenu";
+import { TagBar, TagChip, TYPE_CONFIG } from "./chat/TagChip";
 
 // 过滤掉默认/无意义样式，压缩 AI 上下文
 const DROP_STYLES = new Set([
@@ -133,6 +136,43 @@ import {
 import { Button } from "./ui/button";
 
 // ========================
+// 标签 Badge 渲染
+// ========================
+
+const TAG_EMOJI: Record<string, string> = {
+  skill: "🎯",
+  mcp: "🔌",
+  tool: "🔧",
+  plugin: "🧩",
+};
+
+const TAG_COLORS: Record<string, string> = {
+  skill: "bg-purple-500/15 text-purple-300 border-purple-500/25",
+  mcp: "bg-emerald-500/15 text-emerald-300 border-emerald-500/25",
+  tool: "bg-blue-500/15 text-blue-300 border-blue-500/25",
+  plugin: "bg-amber-500/15 text-amber-300 border-amber-500/25",
+};
+
+const TAG_RE = /\[(skill|mcp|tool|plugin):([^\]]+)\]/g;
+
+/** 解析消息中的标签，返回文本段和标签段交替数组 */
+function parseTaggedContent(text: string): Array<{ type: "text" | "tag"; value: string; tagType?: string }> {
+  const segments: Array<{ type: "text" | "tag"; value: string; tagType?: string }> = [];
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+  while ((match = TAG_RE.exec(text)) !== null) {
+    if (match.index > lastIdx) {
+      segments.push({ type: "text", value: text.slice(lastIdx, match.index) });
+    }
+    segments.push({ type: "tag", value: match[2], tagType: match[1] });
+    lastIdx = match.index + match[0].length;
+  }
+  if (lastIdx < text.length) {
+    segments.push({ type: "text", value: text.slice(lastIdx) });
+  }
+  return segments;
+}
+
 // ========================
 // 消息气泡组件
 // ========================
@@ -165,18 +205,19 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isStreaming }) =
 
       {/* 消息内容 */}
       <div className="flex flex-col min-w-0 max-w-[75%]">
-        <div
-          className={cn(
-            "message-bubble",
-            isUser
-              ? "message-bubble-user"
-              : isAssistant
-                ? "message-bubble-assistant"
-                : "message-bubble-system",
-          )}
-        >
-          {/* 文本内容 - 代码块高亮渲染 */}
-          <div className="text-sm leading-relaxed">
+        <div className="relative group/bubble">
+          <div
+            className={cn(
+              "message-bubble",
+              isUser
+                ? "message-bubble-user"
+                : isAssistant
+                  ? "message-bubble-assistant"
+                  : "message-bubble-system",
+            )}
+          >
+            {/* 文本内容 - 代码块高亮渲染 */}
+            <div className="text-sm leading-relaxed">
             {message.content.split(/(```[\s\S]*?```)/).map((part, i) => {
               if (part.startsWith("```")) {
                 const lines = part.split("\n");
@@ -222,7 +263,31 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isStreaming }) =
                         </code>
                       );
                     }
-                    return <span key={j}>{inlinePart}</span>;
+                    // 解析内联标签
+                    const segments = parseTaggedContent(inlinePart);
+                    if (segments.length <= 1) {
+                      return <span key={j}>{inlinePart}</span>;
+                    }
+                    return (
+                      <span key={j}>
+                        {segments.map((seg, k) => {
+                          if (seg.type === "tag") {
+                            const emoji = TAG_EMOJI[seg.tagType!] || "";
+                            const colors = TAG_COLORS[seg.tagType!] || "";
+                            return (
+                              <span
+                                key={k}
+                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 mx-0.5 rounded-md text-[11px] font-medium border ${colors} align-middle`}
+                              >
+                                <span className="text-[13px] leading-none">{emoji}</span>
+                                <span>{seg.value}</span>
+                              </span>
+                            );
+                          }
+                          return seg.value ? <span key={k}>{seg.value}</span> : null;
+                        })}
+                      </span>
+                    );
                   })}
                 </span>
               );
@@ -238,6 +303,23 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isStreaming }) =
                 <span className="w-1.5 h-1.5 rounded-full bg-primary/50 animate-bounce" style={{ animationDelay: '300ms' }} />
               </span>
             </div>
+          )}
+        </div>
+
+          {/* 复制按钮 - hover 时显示 */}
+          {message.content && (
+            <button
+              className={cn(
+                "absolute top-1 opacity-0 group-hover/bubble:opacity-100 transition-opacity p-1 rounded hover:bg-muted-foreground/10 text-muted-foreground hover:text-foreground",
+                isUser ? "left-1" : "right-1",
+              )}
+              onClick={() => {
+                navigator.clipboard.writeText(message.content);
+              }}
+              title="复制消息"
+            >
+              <Copy className="h-3 w-3" />
+            </button>
           )}
         </div>
 
@@ -337,6 +419,12 @@ const ChatArea: React.FC = () => {
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
+
+  // 命令菜单状态（/ 开头触发）
+  const [showCommandMenu, setShowCommandMenu] = useState(false);
+  const [commandQuery, setCommandQuery] = useState("");
+  // 已选标签列表
+  const [tags, setTags] = useState<CommandItem[]>([]);
   const [selectedAnnotation, setSelectedAnnotation] =
     useState<AnnotationTask | null>(null);
   const [contextMenu, setContextMenu] = useState<{
@@ -347,6 +435,7 @@ const ChatArea: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const commandMenuRef = useRef<CommandMenuHandle>(null);
 
   const {
     sessions,
@@ -507,6 +596,13 @@ const ChatArea: React.FC = () => {
   const handleSend = async () => {
     if (isSending) return;
     let message = input.trim();
+    setShowCommandMenu(false);
+
+    // 构建标签上下文（注入到消息中供 Agent 识别）
+    if (tags.length > 0 && message) {
+      const tagContext = tags.map((t) => `[${t.type}:${t.name}]`).join(" ");
+      message = `${tagContext}\n${message}`;
+    }
 
     // 读取最新 store 状态（避免闭包过期）
     const freshTasks = useAppStore.getState().annotationTasks;
@@ -698,6 +794,7 @@ const ChatArea: React.FC = () => {
     }
 
     setInput("");
+    setTags([]);  // 清除已选标签
     setIsSending(true);
     setLoading(true);
     useAppStore.getState().clearDiagnostics();
@@ -878,8 +975,49 @@ const ChatArea: React.FC = () => {
     }
   };
 
+  // 命令输入检测（/ 开头触发命令菜单）
+  const handleCommandInput = useCallback((value: string) => {
+    if (value.startsWith("/")) {
+      const query = value.slice(1).toLowerCase();
+      setCommandQuery(query);
+      setShowCommandMenu(true);
+    } else {
+      setShowCommandMenu(false);
+    }
+  }, []);
+
+  // 命令菜单选择回调
+  const handleCommandSelect = useCallback((items: CommandItem[]) => {
+    setTags((prev) => {
+      const existing = new Set(prev.map((t) => `${t.type}-${t.id}`));
+      const newItems = items.filter((i) => !existing.has(`${i.type}-${i.id}`));
+      return [...prev, ...newItems];
+    });
+    // 清除输入框中的 / 命令
+    setInput((prev) => prev.replace(/^\/\S*\s*/, ""));
+  }, []);
+
+  // 移除标签
+  const handleRemoveTag = useCallback((id: string) => {
+    setTags((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
   // 快捷键处理
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // 命令菜单可见时，将导航键转发给 CommandMenu
+    if (showCommandMenu) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Escape") {
+        e.preventDefault();
+        commandMenuRef.current?.handleKeyDown(e);
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        commandMenuRef.current?.handleKeyDown(e);
+        return;
+      }
+    }
+    // 正常发送 (Shift+Enter 换行)
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -1310,10 +1448,25 @@ const ChatArea: React.FC = () => {
                   </div>
                 </div>
               )}
+              {/* 命令菜单 */}
+              <CommandMenu
+                ref={commandMenuRef}
+                visible={showCommandMenu}
+                query={commandQuery}
+                onSelect={handleCommandSelect}
+                onClose={() => setShowCommandMenu(false)}
+                position="top"
+              />
+              {/* 标签栏 */}
+              <TagBar tags={tags} onRemove={handleRemoveTag} onClearAll={() => setTags([])} />
               <textarea
                 ref={inputRef}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setInput(val);
+                  handleCommandInput(val);
+                }}
                 onKeyDown={handleKeyDown}
                 placeholder={
                   modelReady
