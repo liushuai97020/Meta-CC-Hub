@@ -94,14 +94,18 @@ function buildProxyOption(proxy: ProxyConfig) {
 let claudeAgentInstance: any = null;
 
 async function initClaudeAgent(): Promise<void> {
-  const module = await import("./claude-agent.js");
-  ClaudeAgentManager = module.ClaudeAgentManager;
-  const models = store.get("models") as ModelConfig[];
-  const activeId = store.get("activeModelId") as string | null;
-  const activeModel = models.find((m) => m.id === activeId);
-  if (activeModel) {
-    claudeAgentInstance = new ClaudeAgentManager();
-    await claudeAgentInstance.initialize(activeModel);
+  try {
+    const module = await import("./claude-agent.js");
+    ClaudeAgentManager = module.ClaudeAgentManager;
+    const models = store.get("models") as ModelConfig[];
+    const activeId = store.get("activeModelId") as string | null;
+    const activeModel = models.find((m) => m.id === activeId);
+    if (activeModel) {
+      claudeAgentInstance = new ClaudeAgentManager();
+      await claudeAgentInstance.initialize(activeModel);
+    }
+  } catch (e) {
+    console.error("[Main] Claude Agent 初始化失败:", e);
   }
 }
 
@@ -109,11 +113,11 @@ async function initClaudeAgent(): Promise<void> {
  * 创建主窗口
  */
 function createMainWindow(): void {
-  const bounds = store.get("windowBounds") as { width: number; height: number };
+  const bounds = store?.get("windowBounds") as { width: number; height: number } | undefined;
 
   mainWindow = new BrowserWindow({
-    width: bounds.width,
-    height: bounds.height,
+    width: bounds?.width || 1400,
+    height: bounds?.height || 900,
     minWidth: 1200,
     minHeight: 700,
     frame: false,
@@ -136,7 +140,7 @@ function createMainWindow(): void {
   }
 
   mainWindow.on("resize", () => {
-    if (mainWindow) {
+    if (mainWindow && store) {
       const [width, height] = mainWindow.getSize();
       store.set("windowBounds", { width, height });
     }
@@ -2159,55 +2163,63 @@ function injectDomInspectorScript(): string {
 // 应用生命周期
 // ==========================================
 app.whenReady().then(async () => {
-  // 先初始化配置存储
-  await initStore();
-  // 应用开机自启设置
-  const appConfig = store.get("appConfig") || { fontSize: 14, autoLaunch: false };
-  if (appConfig.autoLaunch) {
-    app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
-  }
-  // 再设置 IPC 通信
-  setupIpcHandlers();
-  // 注册新 Agent 系统 IPC（Tool/Skill/Plugin/MCP 管理）
-  const { registerAgentIPC, initMemorySystem, getAgentSystem } = await import("./agent-ipc.js");
-  registerAgentIPC(store);
-  // 初始化记忆系统（RAG + 向量记忆），使用记忆系统独立的 Embedding 配置
   try {
-    const savedMemCfg = store.get("memoryConfig") || {};
-    const embBaseUrl = savedMemCfg.embeddingBaseUrl || "https://api.openai.com/v1";
-    const embApiKey = savedMemCfg.embeddingApiKey || "";
-    const embModel = savedMemCfg.embeddingModel || "text-embedding-3-small";
-    // 如果记忆系统没有独立 API Key，回退到当前对话模型的 Key
-    let apiKey = embApiKey;
-    if (!apiKey) {
-      const activeModelId = store.get("activeModelId");
-      const models = store.get("models") as ModelConfig[];
-      const activeModel = models.find((m: ModelConfig) => m.id === activeModelId);
-      if (activeModel?.apiKey) apiKey = activeModel.apiKey;
+    await initStore();
+    const appConfig = store.get("appConfig") || { fontSize: 14, autoLaunch: false };
+    if (appConfig.autoLaunch) {
+      app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
     }
-    initMemorySystem({
-      baseUrl: embBaseUrl,
-      apiKey: apiKey || undefined,
-      model: embModel,
-    });
-  } catch {
-    initMemorySystem();
-  }
-  // 初始化 Claude Agent
-  await initClaudeAgent();
-  // 将 MCP 工具注入 Claude Agent
-  try {
-    const { getAgentSystem } = await import("./agent-ipc.js");
-    const agentSys = getAgentSystem();
-    if (agentSys && claudeAgentInstance) {
-      claudeAgentInstance.setMCPClient(agentSys.mcpClient);
-      console.log("[Main] MCP 客户端已注入 Claude Agent");
+    setupIpcHandlers();
+    const { registerAgentIPC, initMemorySystem, getAgentSystem } = await import("./agent-ipc.js");
+    registerAgentIPC(store);
+    // 初始化记忆系统（RAG + 向量记忆）
+    try {
+      const savedMemCfg = store.get("memoryConfig") || {};
+      const embBaseUrl = savedMemCfg.embeddingBaseUrl || "https://api.openai.com/v1";
+      const embApiKey = savedMemCfg.embeddingApiKey || "";
+      const embModel = savedMemCfg.embeddingModel || "text-embedding-3-small";
+      let apiKey = embApiKey;
+      if (!apiKey) {
+        const activeModelId = store.get("activeModelId");
+        const models = store.get("models") as ModelConfig[];
+        const activeModel = models.find((m: ModelConfig) => m.id === activeModelId);
+        if (activeModel?.apiKey) apiKey = activeModel.apiKey;
+      }
+      initMemorySystem({
+        baseUrl: embBaseUrl,
+        apiKey: apiKey || undefined,
+        model: embModel,
+      });
+    } catch {
+      initMemorySystem();
+    }
+    await initClaudeAgent();
+    // 将 MCP 工具注入 Claude Agent
+    try {
+      const agentSys = getAgentSystem();
+      if (agentSys && claudeAgentInstance) {
+        claudeAgentInstance.setMCPClient(agentSys.mcpClient);
+        console.log("[Main] MCP 客户端已注入 Claude Agent");
+      }
+    } catch (e) {
+      console.warn("[Main] MCP 注入失败:", e);
     }
   } catch (e) {
-    console.warn("[Main] MCP 注入失败:", e);
+    console.error("[Main] 初始化阶段出错:", e);
   }
-  // 最后创建窗口
-  createMainWindow();
+
+  // 无论如何都创建窗口
+  try {
+    createMainWindow();
+  } catch (e) {
+    console.error("[Main] 窗口创建失败，使用回退配置:", e);
+    try {
+      mainWindow = new BrowserWindow({ width: 1400, height: 900 });
+      mainWindow.loadFile(path.join(__dirname, "../../renderer/index.html"));
+    } catch {
+      console.error("[Main] 回退窗口也创建失败");
+    }
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

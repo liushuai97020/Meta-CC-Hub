@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.1] - 2026-05-17
+
+### Fixed
+- 修复打包后 EXE 双击无窗口问题：启动序列缺 try/catch，Agent V2 初始化异常阻断 `createMainWindow()` 执行
+- 修复记忆与上下文页面 `no such module: vec0` 报错：`sqlite-vec` 的 `getLoadablePath()` 返回 ASAR 虚拟路径，Windows `LoadLibrary` 无法从虚拟文件系统加载 DLL，改为复制到 userData 目录后加载
+- 修复 sqlite-vec 扩展加载失败后旧 vec0 虚拟表残留导致的数据库查询异常
+- 增强 `initClaudeAgent()` 和 `createMainWindow()` 内部错误处理，确保窗口创建始终执行
+
 ## [1.1.0] - 2026-05-17
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "metacode",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "MetaCode  - 跨平台桌面 AI 编程助手",
   "main": "dist/main/main/main.js",
   "scripts": {
@@ -25,7 +25,8 @@
     },
     "files": [
       "dist/**/*",
-      "!src/**/*"
+      "!dist/src/**",
+      "!dist-types/**"
     ],
     "asarUnpack": [
       "node_modules/better-sqlite3/**",

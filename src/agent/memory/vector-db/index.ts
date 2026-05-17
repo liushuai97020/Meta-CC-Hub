@@ -26,25 +26,44 @@ export class SQLiteVec {
   /** 初始化数据库连接并建表 */
   init(dbPath: string): void {
     const BetterSqlite3 = require("better-sqlite3") as typeof Database;
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+
     this.db = new BetterSqlite3(dbPath);
-    this.db.pragma("journal_mode = WAL");
+    let vecLoaded = false;
 
     // 尝试加载 sqlite-vec 扩展
     try {
       const sqliteVec = require("sqlite-vec");
-      if (typeof sqliteVec.load === "function") {
-        sqliteVec.load(this.db);
-      } else if (typeof sqliteVec.default?.load === "function") {
-        sqliteVec.default.load(this.db);
-      } else {
-        throw new Error("sqlite-vec 导出结构不匹配");
+      const dllPath = sqliteVec.getLoadablePath();
+      console.log("[SQLiteVec] DLL 路径:", dllPath);
+
+      // 复制 DLL 到 userData 目录（避免 ASAR 解压路径加载问题）
+      const localDir = path.dirname(dbPath);
+      const localDll = path.join(localDir, "vec0.dll");
+      if (dllPath !== localDll) {
+        try { fs.unlinkSync(localDll); } catch {}
+        fs.copyFileSync(dllPath, localDll);
+        console.log("[SQLiteVec] DLL 已复制到:", localDll);
       }
+
+      this.db.loadExtension(localDll);
+      vecLoaded = true;
       console.log("[SQLiteVec] sqlite-vec 扩展加载成功");
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       console.warn(`[SQLiteVec] sqlite-vec 扩展加载失败: ${msg}`);
     }
 
+    // 扩展加载失败：删旧库重建，避免残留 vec0 虚拟表
+    if (!vecLoaded) {
+      this.db.close();
+      this.db = null;
+      try { fs.unlinkSync(dbPath); fs.unlinkSync(dbPath + "-wal"); fs.unlinkSync(dbPath + "-shm"); } catch {}
+      this.db = new BetterSqlite3(dbPath);
+    }
+
+    this.db.pragma("journal_mode = WAL");
     this.createTables();
   }
 
@@ -126,6 +145,18 @@ export class SQLiteVec {
   /** BLOB 存储表（降级方案） */
   private createFallbackTable(): void {
     this.vec0Available = false;
+
+    // 如果此前 vec0 扩展可用时创建了虚拟表，需清理后重建为 BLOB 表
+    const existingTable = this.db!
+      .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='chat_vector'")
+      .get() as { sql: string } | undefined;
+
+    if (existingTable && existingTable.sql.toUpperCase().includes("USING VEC0")) {
+      this.db!.exec("DROP TABLE IF EXISTS chat_vector");
+      this.db!.exec("DROP TABLE IF EXISTS chat_vector_meta");
+      console.log("[SQLiteVec] 已清理旧 vec0 虚拟表，降级为 BLOB 存储");
+    }
+
     this.db!.exec(`
       CREATE TABLE IF NOT EXISTS chat_vector (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
